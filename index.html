@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#020617">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>NataHidup</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',300:'#cbd5e1',
+                            400:'#94a3b8',500:'#64748b',600:'#475569',700:'#1e293b',
+                            800:'#0f172a',900:'#020617'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        *{font-family:'Inter',sans-serif;-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+        body{background:#020617;color:#f1f5f9;overflow-x:hidden;margin:0}
+        .sb-hide::-webkit-scrollbar{display:none}.sb-hide{-ms-overflow-style:none;scrollbar-width:none}
+        .modal-ov{animation:fi .2s ease-out}.modal-ct{animation:su .3s ease-out}
+        @keyframes fi{from{opacity:0}to{opacity:1}}
+        @keyframes su{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes fp{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.4)}50%{box-shadow:0 0 0 8px rgba(59,130,246,0)}}
+        .fab-p{animation:fp 2s infinite}
+        .bb{transition:width .5s ease-out}
+        .ch{transition:all .15s ease}.ch:active{transform:scale(.97)}
+        input,textarea,select{background:#1e293b!important;border:1px solid #334155;color:#f1f5f9;border-radius:8px;padding:10px 12px;outline:none;width:100%;font-size:14px}
+        input:focus,textarea:focus,select:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.2)}
+        select option{background:#1e293b;color:#f1f5f9}
+        .swipe-wrap{position:relative;overflow:hidden;border-radius:12px}
+        .swipe-bg{position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center}
+        .swipe-fg{position:relative;transition:transform .2s ease}
+        .swipe-fg.dragging{transition:none}
+    </style>
+</head>
+<body class="min-h-screen max-w-md mx-auto relative">
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const{useState,useEffect,useCallback,useMemo,useRef}=React;
+
+/* ── PWA Setup ── */
+(function setupPWA(){
+    const m={name:"NataHidup",short_name:"NataHidup",start_url:".",display:"standalone",background_color:"#020617",theme_color:"#0f172a",description:"Produktivitas dan Keuangan Pribadi",icons:[]};
+    const b=new Blob([JSON.stringify(m)],{type:'application/json'});
+    const l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(b);
+    document.head.appendChild(l);
+})();
+
+/* ── Utilities ── */
+const fmtC=a=>new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',minimumFractionDigits:0,maximumFractionDigits:0}).format(a);
+const fmtD=d=>new Date(d).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
+const fmtT=d=>new Date(d).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+const genId=()=>Date.now().toString(36)+Math.random().toString(36).substr(2);
+const getToday=()=>new Date().toISOString().split('T')[0];
+const getMY=()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`};
+const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
+
+function useLS(k,v){
+    const[s,set]=useState(()=>{try{const i=localStorage.getItem(k);return i?JSON.parse(i):v}catch{return v}});
+    const sv=val=>{try{const x=val instanceof Function?val(s):val;set(x);localStorage.setItem(k,JSON.stringify(x))}catch{}};
+    return[s,sv];
+}
+
+/* ── SVG Icons ── */
+const I={
+    Home:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
+    Notes:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
+    Plus:()=><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+    Dollar:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+    Gear:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.2.65.77 1.11 1.51 1.11H21a2 2 0 0 1 0 4h-.09c-.74 0-1.31.46-1.51 1.11z"/></svg>,
+    X:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+    Trash:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+    Check:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>,
+    Up:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
+    Down:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>,
+    Cal:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>,
+    Tag:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>,
+    Star:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
+    Search:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+    DL:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+    Clock:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+    Pin:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>,
+    Repeat:()=><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>,
+    Alert:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+    Flame:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>,
+    Wallet:()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>,
+    Chevron:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
+    User:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+    Building:()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="8.01" y2="6"/><line x1="16" y1="6" x2="16.01" y2="6"/><line x1="12" y1="6" x2="12.01" y2="6"/><line x1="8" y1="10" x2="8.01" y2="10"/><line x1="16" y1="10" x2="16.01" y2="10"/><line x1="12" y1="10" x2="12.01" y2="10"/><line x1="8" y1="14" x2="8.01" y2="14"/><line x1="16" y1="14" x2="16.01" y2="14"/><line x1="12" y1="14" x2="12.01" y2="14"/></svg>,
+    Phone:()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>,
+    Handshake:()=><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/></svg>,
+};
+
+/* ── Category Badge (no emojis) ── */
+function CatBadge({cat,size='md'}){
+    const letter=cat?.name?.charAt(0)?.toUpperCase()||'?';
+    const sz={sm:'w-6 h-6 text-[10px]',md:'w-8 h-8 text-xs',lg:'w-10 h-10 text-sm'};
+    return <div className={`${sz[size]} rounded-lg flex items-center justify-center font-bold text-white shrink-0`} style={{backgroundColor:cat?.color||'#6b7280'}}>{letter}</div>;
+}
+
+function WalletIcon({type}){
+    if(type==='cash') return <I.Wallet/>;
+    if(type==='bank') return <I.Building/>;
+    return <I.Phone/>;
+}
+
+/* ── Swipeable Item ── */
+function SwipeItem({children,onDel}){
+    const[off,setOff]=useState(0);const[drag,setDrag]=useState(false);const sx=useRef(0);const TH=70;
+    const ts=e=>{sx.current=e.touches[0].clientX;setDrag(true)};
+    const tm=e=>{if(!drag)return;const d=e.touches[0].clientX-sx.current;if(d<0)setOff(Math.max(d,-TH-30))};
+    const te=()=>{setDrag(false);if(off<-TH)setOff(-TH);else setOff(0)};
+    return(
+        <div className="swipe-wrap">
+            <div className="swipe-bg bg-red-600 rounded-r-xl">
+                <button onClick={onDel} className="text-white text-xs font-semibold px-3 py-1 rounded bg-red-700">Hapus</button>
+            </div>
+            <div className={`swipe-fg bg-dark-700 rounded-xl ${drag?'dragging':''}`} style={{transform:`translateX(${off}px)`}} onTouchStart={ts} onTouchMove={tm} onTouchEnd={te}>
+                {children}
+            </div>
+        </div>
+    );
+}
+
+/* ── Default Data ── */
+const DEF_WALLETS=[{id:'w1',name:'Cash',type:'cash',balance:0},{id:'w2',name:'Bank Utama',type:'bank',balance:0},{id:'w3',name:'E-Wallet',type:'ewallet',balance:0}];
+const DEF_EXP_CAT=[
+    {id:'makan',name:'Makan & Minum',color:'#f59e0b',type:'expense'},
+    {id:'transport',name:'Transport',color:'#3b82f6',type:'expense'},
+    {id:'hiburan',name:'Hiburan',color:'#8b5cf6',type:'expense'},
+    {id:'tagihan',name:'Tagihan',color:'#ef4444',type:'expense'},
+    {id:'kopi',name:'Kopi & Jajan',color:'#a855f7',type:'expense'},
+    {id:'belanja',name:'Belanja',color:'#ec4899',type:'expense'},
+    {id:'kesehatan',name:'Kesehatan',color:'#10b981',type:'expense'},
+    {id:'pendidikan',name:'Pendidikan',color:'#06b6d4',type:'expense'},
+    {id:'cicilan',name:'Cicilan',color:'#f97316',type:'expense'},
+    {id:'lainnya_e',name:'Lainnya',color:'#6b7280',type:'expense'},
+];
+const DEF_INC_CAT=[
+    {id:'gaji',name:'Gaji',color:'#10b981',type:'income'},
+    {id:'freelance',name:'Freelance',color:'#3b82f6',type:'income'},
+    {id:'bonus',name:'Bonus',color:'#f59e0b',type:'income'},
+    {id:'lainnya_i',name:'Lainnya',color:'#6b7280',type:'income'},
+];
+const DEF_BUDGETS=[
+    {id:'b1',category:'makan',limit:1500000},{id:'b2',category:'transport',limit:500000},
+    {id:'b3',category:'hiburan',limit:300000},{id:'b4',category:'kopi',limit:200000},
+    {id:'b5',category:'belanja',limit:800000},{id:'b6',category:'tagihan',limit:2000000},
+];
+
+/* ══════════════════ MAIN APP ══════════════════ */
+function App(){
+    const[tab,setTab]=useState('home');const[modal,setModal]=useState(null);const[mData,setMData]=useState(null);
+    const[wallets,setWallets]=useLS('nh_w',DEF_WALLETS);
+    const[txns,setTxns]=useLS('nh_tx',[]);
+    const[budgets,setBudgets]=useLS('nh_bg',DEF_BUDGETS);
+    const[wish,setWish]=useLS('nh_wl',[]);
+    const[notes,setNotes]=useLS('nh_n',[]);
+    const[todos,setTodos]=useLS('nh_td',[]);
+    const[debts,setDebts]=useLS('nh_db',[]);
+    const[expCats,setExpCats]=useLS('nh_ec',DEF_EXP_CAT);
+    const[incCats,setIncCats]=useLS('nh_ic',DEF_INC_CAT);
+    const[streak,setStreak]=useLS('nh_sk',{current:0,longest:0,lastDate:null});
+    const allCats=useMemo(()=>[...expCats,...incCats],[expCats,incCats]);
+    const getCat=id=>allCats.find(c=>c.id===id);
+    const totalBal=useMemo(()=>wallets.reduce((s,w)=>s+w.balance,0),[wallets]);
+    const mTxns=useMemo(()=>txns.filter(t=>t.date.startsWith(getMY())),[txns]);
+    const mIncome=useMemo(()=>mTxns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0),[mTxns]);
+    const mExpense=useMemo(()=>mTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[mTxns]);
+    const todayTxns=useMemo(()=>txns.filter(t=>t.date===getToday()),[txns]);
+    const todayExp=useMemo(()=>todayTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[todayTxns]);
+    const catSpend=useMemo(()=>{const s={};mTxns.filter(t=>t.type==='expense').forEach(t=>{s[t.category]=(s[t.category]||0)+t.amount});return s},[mTxns]);
+    const remain=mIncome-mExpense;
+
+    /* Streak logic */
+    useEffect(()=>{
+        const today=getToday();if(streak.lastDate===today)return;
+        const yd=new Date();yd.setDate(yd.getDate()-1);const ydStr=yd.toISOString().split('T')[0];
+        const ydExp=txns.filter(t=>t.date===ydStr&&t.type==='expense').reduce((s,t)=>s+t.amount,0);
+        const now=new Date();const dim=daysInMonth(now.getFullYear(),now.getMonth()+1);
+        const totalBudget=budgets.reduce((s,b)=>s+b.limit,0);const dailyLim=totalBudget/dim;
+        const yesterdayWasYesterday=streak.lastDate===ydStr;
+        let nc=streak.current;
+        if(yesterdayWasYesterday||!streak.lastDate){
+            if(ydExp<=dailyLim&&ydExp>0||ydExp===0&&streak.lastDate){nc=streak.current+1}
+            else if(ydExp>dailyLim){nc=0}
+        }else{nc=0}
+        const nl=Math.max(streak.longest,nc);
+        setStreak({current:nc,longest:nl,lastDate:today});
+    },[]);
+
+    /* Auto-create recurring */
+    useEffect(()=>{
+        const recurring=txns.filter(t=>t.isRecurring);const my=getMY();
+        recurring.forEach(r=>{
+            const exists=txns.some(t=>t.recurringPid===r.id&&t.date.startsWith(my));
+            if(!exists&&new Date().getDate()>=r.recurringDay){
+                const nt={...r,id:genId(),recurringPid:r.id,date:`${my}-${String(r.recurringDay).padStart(2,'0')}`,createdAt:new Date().toISOString(),isRecurring:false};
+                setTxns(p=>[nt,...p]);
+                if(r.walletId)setWallets(p=>p.map(w=>w.id===r.walletId?{...w,balance:w.balance+(r.type==='income'?r.amount:-r.amount)}:w));
+            }
+        });
+    },[]);
+
+    const addTxn=t=>{
+        const n={...t,id:genId(),date:t.date||getToday(),createdAt:new Date().toISOString()};
+        setTxns(p=>[n,...p]);
+        if(t.walletId)setWallets(p=>p.map(w=>w.id===t.walletId?{...w,balance:w.balance+(t.type==='income'?t.amount:-t.amount)}:w));
+    };
+    const delTxn=id=>{
+        const t=txns.find(x=>x.id===id);
+        if(t?.walletId)setWallets(p=>p.map(w=>w.id===t.walletId?{...w,balance:w.balance+(t.type==='income'?-t.amount:t.amount)}:w));
+        setTxns(p=>p.filter(x=>x.id!==id));
+    };
+    const addNote=n=>setNotes(p=>[{...n,id:genId(),pinned:false,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);
+    const updNote=(id,u)=>setNotes(p=>p.map(n=>n.id===id?{...n,...u,updatedAt:new Date().toISOString()}:n));
+    const delNote=id=>setNotes(p=>p.filter(n=>n.id!==id));
+    const addTodo=t=>setTodos(p=>[{...t,id:genId(),completed:false,createdAt:new Date().toISOString()},...p]);
+    const togTodo=id=>setTodos(p=>p.map(t=>t.id===id?{...t,completed:!t.completed}:t));
+    const delTodo=id=>setTodos(p=>p.filter(t=>t.id!==id));
+    const addWish=w=>setWish(p=>[{...w,id:genId(),createdAt:new Date().toISOString()},...p]);
+    const delWish=id=>setWish(p=>p.filter(w=>w.id!==id));
+    const addDebt=d=>setDebts(p=>[{...d,id:genId(),status:'pending',createdAt:new Date().toISOString()},...p]);
+    const togDebt=id=>setDebts(p=>p.map(d=>d.id===id?{...d,status:d.status==='pending'?'paid':'pending'}:d));
+    const delDebt=id=>setDebts(p=>p.filter(d=>d.id!==id));
+    const openM=(t,d=null)=>{setMData(d);setModal(t)};
+    const closeM=()=>{setModal(null);setMData(null)};
+
+    return(
+        <div className="pb-20 min-h-screen">
+            <div className="px-4 pt-4">
+                {tab==='home'&&<Dash totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} openM={openM}/>}
+                {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM}/>}
+                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} wish={wish} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addWish={addWish} delWish={delWish} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
+                {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} wish={wish} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats}/>}
+            </div>
+            <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/95 backdrop-blur border-t border-dark-700 px-2 pb-2 pt-1 z-40">
+                <div className="flex items-center justify-around">
+                    <NB ic={<I.Home/>} lb="Home" ac={tab==='home'} fn={()=>setTab('home')}/>
+                    <NB ic={<I.Notes/>} lb="Notes" ac={tab==='notes'} fn={()=>setTab('notes')}/>
+                    <button onClick={()=>openM('quickAdd')} className="w-14 h-14 -mt-6 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-600/30 fab-p ch text-white"><I.Plus/></button>
+                    <NB ic={<I.Dollar/>} lb="Finance" ac={tab==='finance'} fn={()=>setTab('finance')}/>
+                    <NB ic={<I.Gear/>} lb="Setting" ac={tab==='settings'} fn={()=>setTab('settings')}/>
+                </div>
+            </nav>
+            {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
+            {modal==='addTxn'&&<TxnM close={closeM} save={addTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
+            {modal==='addNote'&&<NoteM close={closeM} save={mData?.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
+            {modal==='addWallet'&&<WalletM close={closeM} save={w=>setWallets(p=>[...p,{...w,id:genId(),balance:0}])}/>}
+            {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={setBudgets}/>}
+            {modal==='addWish'&&<WishM close={closeM} save={addWish}/>}
+            {modal==='addDebt'&&<DebtM close={closeM} save={addDebt}/>}
+            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id);closeM()}} getCat={getCat}/>}
+            {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} save={mData==='expense'?setExpCats:setIncCats} type={mData}/>}
+        </div>
+    );
+}
+
+function NB({ic,lb,ac,fn}){return<button onClick={fn} className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all ${ac?'text-blue-400':'text-dark-400'}`}>{ic}<span className="text-[10px] mt-1 font-medium">{lb}</span></button>}
+
+/* ══════════════════ DASHBOARD ══════════════════ */
+function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets,catSpend,streak,openM}){
+    const now=new Date();const g=now.getHours()<12?'Selamat Pagi':now.getHours()<18?'Selamat Siang':'Selamat Malam';
+    const dn=now.toLocaleDateString('id-ID',{weekday:'long'});
+    const pendTodos=todos.filter(t=>!t.completed).slice(0,4);
+    const warnings=budgets.filter(b=>{const s=catSpend[b.category]||0;return b.limit>0&&s/b.limit>.7}).slice(0,3);
+    const dim=daysInMonth(now.getFullYear(),now.getMonth()+1);
+    const totalBudget=budgets.reduce((s,b)=>s+b.limit,0);
+    const dailyLim=totalBudget/dim;
+    const streakMilestone=streak.current>=30?'Legendaris':streak.current>=14?'Luar Biasa':streak.current>=7?'Konsisten':streak.current>=3?'Mulai Bagus':'';
+
+    return(
+        <div className="space-y-5">
+            <div className="pt-2">
+                <p className="text-dark-400 text-sm">{dn}, {fmtD(now)}</p>
+                <h1 className="text-2xl font-bold mt-1">{g}</h1>
+            </div>
+
+            {/* Streak */}
+            {streak.current>0&&(
+                <div className="bg-gradient-to-r from-orange-600/20 to-amber-600/20 border border-orange-500/30 rounded-2xl p-4 flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-orange-500/20 flex items-center justify-center text-orange-400"><I.Flame/></div>
+                    <div className="flex-1">
+                        <p className="font-bold text-sm">{streak.current} Hari Berturut-turut Hemat</p>
+                        <p className="text-dark-400 text-xs">Terpanjang: {streak.longest} hari{streakMilestone&&<span className="text-orange-400 font-semibold ml-1">-- {streakMilestone}</span>}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* Balance */}
+            <div className="bg-gradient-to-br from-blue-600 to-purple-700 rounded-2xl p-5 shadow-lg shadow-blue-600/20">
+                <p className="text-blue-200 text-sm">Total Saldo</p>
+                <p className="text-3xl font-bold mt-1">{fmtC(totalBal)}</p>
+                <div className="flex justify-between mt-4 pt-4 border-t border-white/20">
+                    <div><p className="text-blue-200 text-xs">Pemasukan</p><p className="text-sm font-semibold text-green-300 flex items-center gap-1"><I.Up/>{fmtC(mIncome)}</p></div>
+                    <div className="text-right"><p className="text-blue-200 text-xs">Pengeluaran</p><p className="text-sm font-semibold text-red-300 flex items-center gap-1"><I.Down/>{fmtC(mExpense)}</p></div>
+                </div>
+            </div>
+
+            {/* Remaining */}
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="font-semibold text-sm">Sisa Budget Bulan Ini</h3>
+                    <span className={`text-sm font-bold ${remain>=0?'text-green-400':'text-red-400'}`}>{fmtC(remain)}</span>
+                </div>
+                <div className="w-full bg-dark-600 rounded-full h-3">
+                    <div className={`h-3 rounded-full bb ${remain>500000?'bg-green-500':remain>0?'bg-yellow-500':'bg-red-500'}`} style={{width:`${Math.min(100,Math.max(0,mIncome>0?(remain/mIncome)*100:0))}%`}}/>
+                </div>
+                <div className="flex justify-between mt-2">
+                    <p className="text-dark-400 text-xs">Limit harian: {fmtC(dailyLim)}</p>
+                    <p className={`text-xs ${todayExp>dailyLim?'text-red-400 font-semibold':'text-dark-400'}`}>Hari ini: {fmtC(todayExp)}</p>
+                </div>
+            </div>
+
+            {/* Warnings */}
+            {warnings.length>0&&(
+                <div className="bg-dark-700 rounded-2xl p-4">
+                    <h3 className="font-semibold text-sm mb-3 flex items-center gap-2 text-yellow-400"><I.Alert/> Peringatan Budget</h3>
+                    <div className="space-y-3">
+                        {warnings.map(bw=>{
+                            const spent=catSpend[bw.category]||0;const pct=Math.min(100,(spent/bw.limit)*100);
+                            const cat=bw.category?{name:bw.category,color:'#6b7280',id:bw.category}:null;
+                            const realCat=cat;
+                            const isOver=pct>=100;
+                            return(
+                                <div key={bw.id}>
+                                    <div className="flex justify-between text-xs mb-1">
+                                        <span className="flex items-center gap-1.5"><CatBadge cat={{name:bw.category,color:'#6b7280'}} size="sm"/><span className="capitalize">{bw.category}</span></span>
+                                        <span className={isOver?'text-red-400 font-bold':'text-yellow-400'}>{fmtC(spent)} / {fmtC(bw.limit)}</span>
+                                    </div>
+                                    <div className="w-full bg-dark-600 rounded-full h-2"><div className={`h-2 rounded-full bb ${isOver?'bg-red-500':'bg-yellow-500'}`} style={{width:`${pct}%`}}/></div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Today */}
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><I.Cal/> Hari Ini</h3>
+                <div className="flex justify-between items-center mb-3 pb-3 border-b border-dark-600">
+                    <span className="text-dark-300 text-sm">Pengeluaran hari ini</span>
+                    <span className="font-bold text-sm">{fmtC(todayExp)}</span>
+                </div>
+                {todayTxns.length>0?(
+                    <div className="space-y-2">{todayTxns.slice(0,3).map(t=><TxnRow key={t.id} t={t} getCat={id=>allCatsGlobal.find(c=>c.id===id)}/>)}</div>
+                ):(<p className="text-dark-500 text-sm text-center py-2">Belum ada transaksi</p>)}
+                {pendTodos.length>0&&(
+                    <><div className="border-t border-dark-600 mt-3 pt-3"><p className="text-dark-400 text-xs mb-2">Tugas ({pendTodos.length})</p></div>
+                    <div className="space-y-2">{pendTodos.map(t=>(
+                        <div key={t.id} className="flex items-center gap-2">
+                            <div className="w-4 h-4 border-2 border-dark-400 rounded shrink-0"/>
+                            <span className="text-sm truncate flex-1">{t.title}</span>
+                            {t.deadline&&<span className="text-xs text-dark-500">{fmtD(t.deadline)}</span>}
+                        </div>
+                    ))}</div></>
+                )}
+            </div>
+        </div>
+    );
+}
+/* Global category fallback for Dash TxnRow */
+let allCatsGlobal=[];
+function TxnRow({t,getCat:gc}){
+    const cat=gc?.(t.category)||{name:t.category,color:'#6b7280'};
+    return(
+        <div className="flex items-center gap-3 py-1">
+            <CatBadge cat={cat} size="sm"/>
+            <div className="flex-1 min-w-0"><p className="text-sm truncate">{t.note||cat.name}</p></div>
+            <span className={`text-sm font-semibold ${t.type==='income'?'text-green-400':'text-red-400'}`}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</span>
+        </div>
+    );
+}
+
+/* ══════════════════ FINANCE MODULE ══════════════════ */
+function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,wish,debts,totalBal,allCats,getCat,setWallets,setBudgets,addWish,delWish,addDebt,togDebt,delDebt,delTxn,openM}){
+    const[sub,setSub]=useState('overview');
+    allCatsGlobal=allCats;
+    return(
+        <div className="space-y-4">
+            <div className="pt-2"><h1 className="text-2xl font-bold">Keuangan</h1><p className="text-dark-400 text-sm mt-1">Kelola keuanganmu dengan bijak</p></div>
+            <div className="flex gap-1 bg-dark-700 rounded-xl p-1 overflow-x-auto sb-hide">
+                {[{id:'overview',l:'Ringkasan'},{id:'transactions',l:'Transaksi'},{id:'budget',l:'Budget'},{id:'wishlist',l:'Wishlist'},{id:'debts',l:'Hutang'}].map(t=>(
+                    <button key={t.id} onClick={()=>setSub(t.id)} className={`px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${sub===t.id?'bg-blue-600 text-white':'text-dark-400'}`}>{t.l}</button>
+                ))}
+            </div>
+            {sub==='overview'&&<FinOverview wallets={wallets} mIncome={mIncome} mExpense={mExpense} totalBal={totalBal} catSpend={catSpend} allCats={allCats} openM={openM}/>}
+            {sub==='transactions'&&<TxnList txns={txns} getCat={getCat} openM={openM} delTxn={delTxn}/>}
+            {sub==='budget'&&<BudgetView budgets={budgets} catSpend={catSpend} allCats={allCats} openM={openM}/>}
+            {sub==='wishlist'&&<WishView wish={wish} totalBal={totalBal} openM={openM} del={delWish}/>}
+            {sub==='debts'&&<DebtView debts={debts} openM={openM} tog={togDebt} del={delDebt}/>}
+        </div>
+    );
+}
+
+function FinOverview({wallets,mIncome,mExpense,totalBal,catSpend,allCats,openM}){
+    const totalExp=Object.values(catSpend).reduce((a,b)=>a+b,0);
+    const chart=allCats.filter(c=>c.type==='expense').map(c=>({...c,amt:catSpend[c.id]||0,pct:totalExp>0?((catSpend[c.id]||0)/totalExp*100):0})).filter(d=>d.amt>0).sort((a,b)=>b.amt-a.amt);
+    return(
+        <div className="space-y-4">
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <div className="flex justify-between items-center mb-3"><h3 className="font-semibold text-sm">Dompet & Rekening</h3><button onClick={()=>openM('addWallet')} className="text-blue-400 text-xs font-medium">+ Tambah</button></div>
+                <div className="space-y-2">{wallets.map(w=>(
+                    <div key={w.id} className="flex items-center justify-between py-2.5 px-3 bg-dark-600 rounded-xl">
+                        <div className="flex items-center gap-3"><span className="text-dark-300"><WalletIcon type={w.type}/></span><div><p className="text-sm font-medium">{w.name}</p><p className="text-[10px] text-dark-400 uppercase">{w.type}</p></div></div>
+                        <p className="font-bold text-sm">{fmtC(w.balance)}</p>
+                    </div>
+                ))}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+                <div className="bg-dark-700 rounded-xl p-4"><div className="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center text-green-400 mb-2"><I.Up/></div><p className="text-dark-400 text-xs">Pemasukan</p><p className="text-lg font-bold text-green-400">{fmtC(mIncome)}</p></div>
+                <div className="bg-dark-700 rounded-xl p-4"><div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center text-red-400 mb-2"><I.Down/></div><p className="text-dark-400 text-xs">Pengeluaran</p><p className="text-lg font-bold text-red-400">{fmtC(mExpense)}</p></div>
+            </div>
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <h3 className="font-semibold text-sm mb-4">Pengeluaran per Kategori</h3>
+                {chart.length>0?<div className="space-y-3">{chart.map(c=>(
+                    <div key={c.id}>
+                        <div className="flex justify-between items-center mb-1"><span className="text-sm flex items-center gap-2"><CatBadge cat={c} size="sm"/>{c.name}</span><span className="text-sm font-medium">{fmtC(c.amt)}</span></div>
+                        <div className="w-full bg-dark-600 rounded-full h-2"><div className="h-2 rounded-full bb" style={{width:`${c.pct}%`,backgroundColor:c.color}}/></div>
+                        <p className="text-dark-500 text-[10px] mt-0.5">{c.pct.toFixed(1)}%</p>
+                    </div>
+                ))}</div>:<p className="text-dark-500 text-sm text-center py-4">Belum ada pengeluaran</p>}
+            </div>
+        </div>
+    );
+}
+
+function TxnList({txns,getCat,openM,delTxn}){
+    const[filter,setFilter]=useState('all');
+    const filtered=useMemo(()=>filter==='all'?txns:txns.filter(t=>t.type===filter),[txns,filter]);
+    const grouped=useMemo(()=>{const g={};filtered.forEach(t=>{if(!g[t.date])g[t.date]=[];g[t.date].push(t)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0]))},[filtered]);
+    return(
+        <div className="space-y-4">
+            <div className="flex gap-2">{[{id:'all',l:'Semua'},{id:'expense',l:'Keluar'},{id:'income',l:'Masuk'}].map(f=>(<button key={f.id} onClick={()=>setFilter(f.id)} className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${filter===f.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{f.l}</button>))}</div>
+            {grouped.length>0?grouped.map(([date,items])=>(
+                <div key={date}><p className="text-dark-400 text-xs font-medium mb-2">{fmtD(date)}</p>
+                <div className="space-y-2">{items.map(t=>{
+                    const cat=getCat(t.category)||{name:t.category,color:'#6b7280'};
+                    return(
+                        <SwipeItem key={t.id} onDel={()=>delTxn(t.id)}>
+                            <div className="p-3 flex items-center gap-3 ch" onClick={()=>openM('txnDetail',t)}>
+                                <CatBadge cat={cat}/>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium truncate">{t.note||cat.name}</p>
+                                    <p className="text-[10px] text-dark-400 flex items-center gap-1">{cat.name}{t.isRecurring&&<span className="text-blue-400 flex items-center"><I.Repeat/></span>} -- {fmtT(t.createdAt)}</p>
+                                </div>
+                                <span className={`text-sm font-bold ${t.type==='income'?'text-green-400':'text-red-400'}`}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</span>
+                            </div>
+                        </SwipeItem>
+                    );
+                })}</div></div>
+            )):(
+                <div className="text-center py-12"><p className="text-dark-500 text-4xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada transaksi</p><button onClick={()=>openM('addTxn',{type:'expense'})} className="mt-3 text-blue-400 text-sm font-medium">+ Tambah Transaksi</button></div>
+            )}
+        </div>
+    );
+}
+
+function BudgetView({budgets,catSpend,allCats,openM}){
+    const totalB=budgets.reduce((s,b)=>s+b.limit,0);
+    return(
+        <div className="space-y-4">
+            <div className="flex justify-between items-center"><div><p className="text-dark-400 text-xs">Total Budget</p><p className="text-lg font-bold">{fmtC(totalB)}</p></div><button onClick={()=>openM('editBudget')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">Edit Budget</button></div>
+            <div className="space-y-3">{budgets.map(b=>{
+                const spent=catSpend[b.category]||0;const pct=b.limit>0?Math.min(100,(spent/b.limit)*100):0;
+                const cat=allCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};
+                const over=pct>=100;const warn=pct>=70&&!over;
+                return(
+                    <div key={b.id} className={`bg-dark-700 rounded-xl p-4 ${over?'border border-red-500/40':''}`}>
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div>
+                            {over&&<span className="text-[10px] bg-red-500/20 text-red-400 px-2 py-1 rounded-full font-bold">LEBIH</span>}
+                            {warn&&<span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded-full">Hampir</span>}
+                        </div>
+                        <div className="flex justify-between text-xs mb-2"><span className="text-dark-400">{fmtC(spent)}</span><span className="font-medium">{fmtC(b.limit)}</span></div>
+                        <div className="w-full bg-dark-600 rounded-full h-3"><div className={`h-3 rounded-full bb ${over?'bg-red-500':warn?'bg-yellow-500':'bg-green-500'}`} style={{width:`${pct}%`}}/></div>
+                        <p className="text-[10px] mt-1 text-dark-500">Sisa: {fmtC(Math.max(0,b.limit-spent))}</p>
+                    </div>
+                );
+            })}</div>
+        </div>
+    );
+}
+
+function WishView({wish,totalBal,openM,del}){
+    const now=Date.now();
+    return(
+        <div className="space-y-4">
+            <div className="flex justify-between items-center"><p className="text-dark-400 text-sm">Barang yang ingin dibeli</p><button onClick={()=>openM('addWish')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">+ Tambah</button></div>
+            {wish.length>0?<div className="space-y-3">{wish.map(w=>{
+                const age=now-new Date(w.createdAt).getTime();const ready=age>=86400000;
+                const canBuy=totalBal>=w.price&&ready;
+                const hrs=Math.max(0,Math.ceil((86400000-age)/3600000));
+                return(
+                    <div key={w.id} className="bg-dark-700 rounded-xl p-4">
+                        <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                                <p className="font-medium text-sm">{w.name}</p>
+                                <p className="text-blue-400 font-bold mt-1">{fmtC(w.price)}</p>
+                                {w.note&&<p className="text-dark-400 text-xs mt-1">{w.note}</p>}
+                                {!ready&&<p className="text-yellow-400 text-xs mt-2 flex items-center gap-1"><I.Clock/> Jeda anti-impulsif: {hrs} jam lagi</p>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <span className={`text-[10px] px-2 py-1 rounded-full font-medium ${canBuy?'bg-green-500/20 text-green-400':!ready?'bg-yellow-500/20 text-yellow-400':'bg-dark-600 text-dark-400'}`}>{canBuy?'Bisa beli':!ready?'Tunggu':'Dana kurang'}</span>
+                                <button onClick={()=>del(w.id)} className="text-dark-400 p-1"><I.Trash/></button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })}</div>:(
+                <div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Wishlist kosong</p></div>
+            )}
+        </div>
+    );
+}
+
+function DebtView({debts,openM,tog,del}){
+    const pending=debts.filter(d=>d.status==='pending');const paid=debts.filter(d=>d.status==='paid');
+    const totalHutang=pending.filter(d=>d.dtype==='hutang').reduce((s,d)=>s+d.amount,0);
+    const totalPiutang=pending.filter(d=>d.dtype==='piutang').reduce((s,d)=>s+d.amount,0);
+    return(
+        <div className="space-y-4">
+            <div className="flex justify-between items-center"><p className="text-dark-400 text-sm">Catat hutang & piutang</p><button onClick={()=>openM('addDebt')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">+ Tambah</button></div>
+            <div className="grid grid-cols-2 gap-3">
+                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3"><p className="text-red-400 text-xs">Hutang (Kamu hutang)</p><p className="text-red-400 font-bold text-lg mt-1">{fmtC(totalHutang)}</p></div>
+                <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3"><p className="text-green-400 text-xs">Piutang (Dihutang kamu)</p><p className="text-green-400 font-bold text-lg mt-1">{fmtC(totalPiutang)}</p></div>
+            </div>
+            {pending.length>0&&<><p className="text-dark-400 text-xs font-medium">Belum Lunas ({pending.length})</p><div className="space-y-2">{pending.map(d=>(
+                <SwipeItem key={d.id} onDel={()=>del(d.id)}>
+                    <div className="p-3 flex items-center gap-3 ch" onClick={()=>tog(d.id)}>
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${d.dtype==='hutang'?'bg-red-500/20 text-red-400':'bg-green-500/20 text-green-400'}`}><I.Handshake/></div>
+                        <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{d.name}</p><p className="text-[10px] text-dark-400">{d.dtype==='hutang'?'Kamu hutang':'Dihutang kamu'}{d.dueDate&&` -- Jatuh tempo: ${fmtD(d.dueDate)}`}</p></div>
+                        <span className={`text-sm font-bold ${d.dtype==='hutang'?'text-red-400':'text-green-400'}`}>{fmtC(d.amount)}</span>
+                    </div>
+                </SwipeItem>
+            ))}</div></>}
+            {paid.length>0&&<><p className="text-dark-400 text-xs font-medium">Lunas ({paid.length})</p><div className="space-y-2">{paid.map(d=>(
+                <SwipeItem key={d.id} onDel={()=>del(d.id)}>
+                    <div className="p-3 flex items-center gap-3 opacity-50 ch" onClick={()=>tog(d.id)}>
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-dark-600 text-dark-400"><I.Check/></div>
+                        <div className="flex-1 min-w-0"><p className="text-sm line-through">{d.name}</p></div>
+                        <span className="text-sm text-dark-400">{fmtC(d.amount)}</span>
+                    </div>
+                </SwipeItem>
+            ))}</div></>}
+            {debts.length===0&&<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada catatan hutang</p></div>}
+        </div>
+    );
+}
+
+/* ══════════════════ NOTES MODULE ══════════════════ */
+function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,openM}){
+    const[sub,setSub]=useState('notes');const[q,setQ]=useState('');const[tag,setTag]=useState('all');
+    const allTags=useMemo(()=>{const s=new Set();notes.forEach(n=>(n.tags||[]).forEach(t=>s.add(t)));return['all',...Array.from(s)]},[notes]);
+    const filtered=useMemo(()=>{let f=notes;if(q)f=f.filter(n=>n.title.toLowerCase().includes(q.toLowerCase())||n.content.toLowerCase().includes(q.toLowerCase()));if(tag!=='all')f=f.filter(n=>(n.tags||[]).includes(tag));return f.sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0)||new Date(b.updatedAt)-new Date(a.updatedAt))},[notes,q,tag]);
+    const pend=todos.filter(t=>!t.completed);const done=todos.filter(t=>t.completed);
+    return(
+        <div className="space-y-4">
+            <div className="pt-2"><h1 className="text-2xl font-bold">Catatan</h1><p className="text-dark-400 text-sm mt-1">Tulis dan atur semuanya di sini</p></div>
+            <div className="flex gap-1 bg-dark-700 rounded-xl p-1">
+                <button onClick={()=>setSub('notes')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='notes'?'bg-blue-600 text-white':'text-dark-400'}`}>Catatan ({notes.length})</button>
+                <button onClick={()=>setSub('todos')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='todos'?'bg-blue-600 text-white':'text-dark-400'}`}>To-Do ({pend.length})</button>
+            </div>
+            {sub==='notes'&&(<div className="space-y-3">
+                <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"><I.Search/></span><input type="text" placeholder="Cari catatan..." value={q} onChange={e=>setQ(e.target.value)} className="pl-10"/></div>
+                <div className="flex gap-2 overflow-x-auto sb-hide pb-1">{allTags.map(t=>(<button key={t} onClick={()=>setTag(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${tag===t?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{t==='all'?'Semua':`#${t}`}</button>))}</div>
+                {filtered.length>0?<div className="grid grid-cols-2 gap-3">{filtered.map(n=>(
+                    <div key={n.id} className="bg-dark-700 rounded-xl p-3 ch cursor-pointer relative" onClick={()=>openM('addNote',n)}>
+                        {n.pinned&&<span className="absolute top-2 right-2 text-blue-400"><I.Pin/></span>}
+                        <p className="font-medium text-sm truncate pr-5">{n.title||'Tanpa Judul'}</p>
+                        <p className="text-dark-400 text-xs mt-1" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{n.content}</p>
+                        <div className="flex items-center justify-between mt-2">
+                            <div className="flex gap-1">{(n.tags||[]).slice(0,2).map(t=>(<span key={t} className="text-[9px] bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">#{t}</span>))}</div>
+                            <span className="text-[9px] text-dark-500">{fmtD(n.updatedAt)}</span>
+                        </div>
+                    </div>
+                ))}</div>:(
+                    <div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada catatan</p><button onClick={()=>openM('addNote')} className="mt-3 text-blue-400 text-sm font-medium">+ Buat Catatan</button></div>
+                )}
+            </div>)}
+            {sub==='todos'&&(<div className="space-y-4">
+                <TodoQuick add={addTodo}/>
+                {pend.length>0&&<><p className="text-dark-400 text-xs font-medium">Belum Selesai ({pend.length})</p><div className="space-y-2">{pend.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
+                {done.length>0&&<><p className="text-dark-400 text-xs font-medium mt-4">Selesai ({done.length})</p><div className="space-y-2">{done.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
+                {todos.length===0&&<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada tugas</p></div>}
+            </div>)}
+        </div>
+    );
+}
+function TodoQuick({add}){const[t,setT]=useState('');const h=e=>{e.preventDefault();if(!t.trim())return;add({title:t.trim(),deadline:null});setT('')};return<form onSubmit={h} className="flex gap-2"><input type="text" placeholder="Tambah tugas baru..." value={t} onChange={e=>setT(e.target.value)} className="flex-1"/><button type="submit" className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium">+</button></form>}
+function TodoItem({t,tog}){return(<div className={`bg-dark-700 rounded-xl p-3 flex items-center gap-3 ${t.completed?'opacity-50':''}`}><button onClick={()=>tog(t.id)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shrink-0 ${t.completed?'bg-green-500 border-green-500':'border-dark-400'}`}>{t.completed&&<I.Check/>}</button><div className="flex-1 min-w-0"><p className={`text-sm ${t.completed?'line-through text-dark-400':''}`}>{t.title}</p>{t.deadline&&<p className="text-[10px] text-dark-400 mt-0.5 flex items-center gap-1"><I.Cal/>{fmtD(t.deadline)}</p>}</div></div>)}
+
+/* ══════════════════ SETTINGS ══════════════════ */
+function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,wish,debts,expCats,incCats,setExpCats,setIncCats}){
+    const exp=()=>{const d={wallets,txns,budgets,notes,todos,wish,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
+    const reset=()=>{if(confirm('Hapus semua data? Tindakan ini tidak bisa dibatalkan.')){localStorage.clear();location.reload()}};
+    return(
+        <div className="space-y-4">
+            <div className="pt-2"><h1 className="text-2xl font-bold">Pengaturan</h1><p className="text-dark-400 text-sm mt-1">Kelola aplikasi NataHidup</p></div>
+            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v2.0.0</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Kategori</h3>
+                <div className="space-y-2">
+                    <button onClick={()=>{/* open cat edit */}} className="w-full flex items-center justify-between py-3 px-4 bg-dark-600 rounded-xl text-sm ch" onClick={()=>{
+                        const ev=new CustomEvent('openM',{detail:{type:'editCats',data:'expense'}});window.dispatchEvent(ev);
+                    }}>
+                        <span>Kategori Pengeluaran ({expCats.length})</span><I.Chevron/>
+                    </button>
+                    <CatEditInline cats={expCats} set={setExpCats} type="expense"/>
+                    <CatEditInline cats={incCats} set={setIncCats} type="income"/>
+                </div>
+            </div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Statistik</h3>
+                <div className="space-y-2">
+                    <div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-dark-400">To-Do</span><span>{todos.length}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-dark-400">Wishlist</span><span>{wish.length}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div>
+                </div>
+            </div>
+            <div className="bg-dark-700 rounded-2xl p-4 space-y-3"><h3 className="font-semibold text-sm">Data</h3>
+                <button onClick={exp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch"><I.DL/><span>Ekspor Data (JSON)</span></button>
+                <button onClick={reset} className="w-full flex items-center gap-3 py-3 px-4 bg-red-500/10 rounded-xl text-sm text-red-400 ch"><I.Trash/><span>Reset Semua Data</span></button>
+            </div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-2">PWA</h3><p className="text-dark-400 text-xs leading-relaxed">Untuk meng-install sebagai aplikasi, deploy file ini ke server HTTPS. Browser akan menampilkan opsi "Add to Home Screen". Service worker perlu dibuat sebagai file terpisah (sw.js) untuk caching offline penuh.</p></div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-2">Tentang</h3><p className="text-dark-400 text-xs leading-relaxed">NataHidup membantu mengatur keuangan, catatan, dan tugas harian. Semua data tersimpan lokal di browser.</p></div>
+        </div>
+    );
+}
+
+function CatEditInline({cats,set,type}){
+    const[newName,setNewName]=useState('');
+    const add=()=>{if(!newName.trim())return;set(p=>[...p,{id:genId(),name:newName.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNewName('')};
+    const del=id=>set(p=>p.filter(c=>c.id!==id));
+    return(
+        <div className="space-y-2">
+            <p className="text-xs text-dark-400 font-medium mt-2">{type==='expense'?'Pengeluaran':'Pemasukan'}</p>
+            <div className="flex flex-wrap gap-1.5">{cats.map(c=>(
+                <span key={c.id} className="flex items-center gap-1 bg-dark-600 rounded-full px-2.5 py-1 text-xs">
+                    <CatBadge cat={c} size="sm"/>{c.name}
+                    <button onClick={()=>del(c.id)} className="text-dark-400 ml-1 hover:text-red-400"><I.X/></button>
+                </span>
+            ))}</div>
+            <div className="flex gap-2 mt-1">
+                <input type="text" placeholder="Kategori baru..." value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1 text-xs"/>
+                <button onClick={add} className="bg-blue-600 text-white px-3 rounded-lg text-xs font-medium">+</button>
+            </div>
+        </div>
+    );
+}
+
+/* ══════════════════ MODALS ══════════════════ */
+function MW({close,children,title}){
+    return(
+        <div className="fixed inset-0 z-50 flex items-end justify-center modal-ov" onClick={close}>
+            <div className="absolute inset-0 bg-black/60"/>
+            <div className="relative w-full max-w-md bg-dark-800 rounded-t-3xl max-h-[92vh] overflow-y-auto modal-ct sb-hide" onClick={e=>e.stopPropagation()}>
+                <div className="sticky top-0 bg-dark-800 pt-3 pb-2 px-5 border-b border-dark-700 z-10">
+                    <div className="w-10 h-1 bg-dark-600 rounded-full mx-auto mb-3"/>
+                    <div className="flex justify-between items-center"><h2 className="text-lg font-bold">{title}</h2><button onClick={close} className="text-dark-400 p-1"><I.X/></button></div>
+                </div>
+                <div className="p-5">{children}</div>
+            </div>
+        </div>
+    );
+}
+
+function QuickAddM({close,openM}){
+    return(<MW close={close} title="Tambah Cepat"><div className="grid grid-cols-2 gap-4">
+        <button onClick={()=>{close();setTimeout(()=>openM('addTxn',{type:'expense'}),200)}} className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-400"><I.Down/></div><span className="text-sm font-medium">Pengeluaran</span></button>
+        <button onClick={()=>{close();setTimeout(()=>openM('addTxn',{type:'income'}),200)}} className="bg-green-500/10 border border-green-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center text-green-400"><I.Up/></div><span className="text-sm font-medium">Pemasukan</span></button>
+        <button onClick={()=>{close();setTimeout(()=>openM('addNote'),200)}} className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Notes/></div><span className="text-sm font-medium">Catatan</span></button>
+        <button onClick={()=>{close();setTimeout(()=>openM('addWish'),200)}} className="bg-purple-500/10 border border-purple-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400"><I.Star/></div><span className="text-sm font-medium">Wishlist</span></button>
+    </div></MW>);
+}
+
+function TxnM({close,save,wallets,expCats,incCats,ed}){
+    const[type,setType]=useState(ed?.type||'expense');
+    const[amt,setAmt]=useState(ed?.amount?.toString()||'');
+    const[cat,setCat]=useState(ed?.category||'');
+    const[note,setNote]=useState(ed?.note||'');
+    const[wid,setWid]=useState(ed?.walletId||wallets[0]?.id||'');
+    const[date,setDate]=useState(ed?.date||getToday());
+    const[recurring,setRec]=useState(ed?.isRecurring||false);
+    const[recDay,setRecDay]=useState(ed?.recurringDay||new Date().getDate());
+    const cats=type==='expense'?expCats:incCats;
+    const sub=e=>{e.preventDefault();if(!amt||!cat)return;save({type,amount:parseFloat(amt),category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null});close()};
+    return(<MW close={close} title={ed?'Edit Transaksi':'Tambah Transaksi'}>
+        <form onSubmit={sub} className="space-y-4">
+            <div className="flex gap-2 bg-dark-700 rounded-xl p-1">
+                <button type="button" onClick={()=>{setType('expense');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='expense'?'bg-red-500 text-white':'text-dark-400'}`}>Pengeluaran</button>
+                <button type="button" onClick={()=>{setType('income');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='income'?'bg-green-500 text-white':'text-dark-400'}`}>Pemasukan</button>
+            </div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/></div>
+            <div><label className="text-xs text-dark-400 mb-2 block">Kategori</label><div className="grid grid-cols-3 gap-2">{cats.map(c=>(<button key={c.id} type="button" onClick={()=>setCat(c.id)} className={`p-2.5 rounded-xl text-center transition-all ${cat===c.id?'bg-blue-500/20 border-2 border-blue-500':'bg-dark-700 border-2 border-transparent'}`}><CatBadge cat={c} size="sm"/><p className="text-[9px] mt-1 truncate">{c.name}</p></button>))}</div></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Deskripsi singkat" value={note} onChange={e=>setNote(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Dompet</label><select value={wid} onChange={e=>setWid(e.target.value)}>{wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}</select></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Tanggal</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+            <label className="flex items-center gap-3 py-2 cursor-pointer">
+                <input type="checkbox" checked={recurring} onChange={e=>setRec(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
+                <div><span className="text-sm">Transaksi Berulang</span><p className="text-[10px] text-dark-400">Otomatis dicatat setiap bulan</p></div>
+            </label>
+            {recurring&&<div><label className="text-xs text-dark-400 mb-1 block">Tanggal Berulang (tiap bulan)</label><input type="number" min="1" max="28" value={recDay} onChange={e=>setRecDay(parseInt(e.target.value)||1)}/></div>}
+            <button type="submit" disabled={!amt||!cat} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amt||!cat?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
+        </form>
+    </MW>);
+}
+
+function NoteM({close,save,ed}){
+    const[title,setTitle]=useState(ed?.title||'');const[content,setContent]=useState(ed?.content||'');const[tags,setTags]=useState(ed?.tags?.join(', ')||'');const[pinned,setPinned]=useState(ed?.pinned||false);
+    const sub=e=>{e.preventDefault();if(!content.trim()&&!title.trim())return;save({title:title.trim(),content:content.trim(),tags:tags.split(',').map(t=>t.trim()).filter(Boolean),pinned});close()};
+    return(<MW close={close} title={ed?.id?'Edit Catatan':'Catatan Baru'}>
+        <form onSubmit={sub} className="space-y-4">
+            <input type="text" placeholder="Judul catatan..." value={title} onChange={e=>setTitle(e.target.value)} className="text-lg font-bold"/>
+            <textarea placeholder="Tulis catatan..." value={content} onChange={e=>setContent(e.target.value)} rows={8} className="resize-none"/>
+            <div><label className="text-xs text-dark-400 mb-1 block">Tags (pisahkan dengan koma)</label><input type="text" placeholder="Kerjaan, Pribadi, Ide" value={tags} onChange={e=>setTags(e.target.value)}/></div>
+            <label className="flex items-center gap-3 py-2 cursor-pointer">
+                <input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
+                <span className="text-sm flex items-center gap-1"><I.Pin/> Sematkan di atas</span>
+            </label>
+            <button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button>
+        </form>
+    </MW>);
+}
+
+function WalletM({close,save}){
+    const[name,setName]=useState('');const[type,setType]=useState('cash');
+    const sub=e=>{e.preventDefault();if(!name.trim())return;save({name:name.trim(),type});close()};
+    return(<MW close={close} title="Tambah Dompet">
+        <form onSubmit={sub} className="space-y-4">
+            <div><label className="text-xs text-dark-400 mb-1 block">Nama</label><input type="text" placeholder="Contoh: BCA, GoPay" value={name} onChange={e=>setName(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-2 block">Tipe</label><div className="grid grid-cols-3 gap-2">{[{id:'cash',l:'Cash'},{id:'bank',l:'Bank'},{id:'ewallet',l:'E-Wallet'}].map(t=>(<button key={t.id} type="button" onClick={()=>setType(t.id)} className={`py-3 rounded-xl text-sm flex flex-col items-center gap-1 ${type===t.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}><WalletIcon type={t.id}/><span className="text-[10px]">{t.l}</span></button>))}</div></div>
+            <p className="text-xs text-dark-400">Saldo awal otomatis Rp 0. Tambahkan melalui transaksi pemasukan.</p>
+            <button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button>
+        </form>
+    </MW>);
+}
+
+function BudgetM({close,budgets,expCats,save}){
+    const[local,setLocal]=useState(budgets);
+    const upd=(id,v)=>setLocal(p=>p.map(b=>b.id===id?{...b,limit:parseFloat(v)||0}:b));
+    return(<MW close={close} title="Atur Budget">
+        <div className="space-y-4">
+            <p className="text-dark-400 text-xs">Batas maksimal pengeluaran per kategori per bulan.</p>
+            {local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};return(
+                <div key={b.id} className="bg-dark-700 rounded-xl p-3">
+                    <div className="flex items-center gap-2 mb-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div>
+                    <input type="number" placeholder="Limit" value={b.limit} onChange={e=>upd(b.id,e.target.value)} className="text-sm"/>
+                </div>
+            )})}
+            <button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button>
+        </div>
+    </MW>);
+}
+
+function WishM({close,save}){
+    const[name,setName]=useState('');const[price,setPrice]=useState('');const[note,setNote]=useState('');
+    const sub=e=>{e.preventDefault();if(!name.trim()||!price)return;save({name:name.trim(),price:parseFloat(price),note:note.trim()});close()};
+    return(<MW close={close} title="Tambah Wishlist">
+        <form onSubmit={sub} className="space-y-4">
+            <div><label className="text-xs text-dark-400 mb-1 block">Nama Barang</label><input type="text" placeholder="Contoh: Headphone Sony" value={name} onChange={e=>setName(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Harga (Rp)</label><input type="number" placeholder="0" value={price} onChange={e=>setPrice(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Catatan (opsional)</label><input type="text" placeholder="Link, warna, dll" value={note} onChange={e=>setNote(e.target.value)}/></div>
+            <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3"><p className="text-xs text-yellow-400 flex items-center gap-1"><I.Clock/> Setelah ditambahkan, ada jeda 24 jam sebelum tombol "Bisa beli" aktif. Ini membantumu menghindari pembelian impulsif.</p></div>
+            <button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Tambah</button>
+        </form>
+    </MW>);
+}
+
+function DebtM({close,save}){
+    const[name,setName]=useState('');const[dtype,setDtype]=useState('hutang');const[amt,setAmt]=useState('');const[due,setDue]=useState('');const[note,setNote]=useState('');
+    const sub=e=>{e.preventDefault();if(!name.trim()||!amt)return;save({name:name.trim(),dtype,amount:parseFloat(amt),dueDate:due||null,note:note.trim()});close()};
+    return(<MW close={close} title="Tambah Hutang / Piutang">
+        <form onSubmit={sub} className="space-y-4">
+            <div className="flex gap-2 bg-dark-700 rounded-xl p-1">
+                <button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang (Kamu berhutang)</button>
+                <button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang (Dihutang)</button>
+            </div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div>
+            <button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button>
+        </form>
+    </MW>);
+}
+
+function TxnDetailM({txn,close,del,getCat}){
+    const cat=getCat(txn.category)||{name:txn.category,color:'#6b7280'};
+    return(<MW close={close} title="Detail Transaksi">
+        <div className="space-y-4">
+            <div className="text-center py-4"><CatBadge cat={cat} size="lg"/><p className={`text-2xl font-bold mt-2 ${txn.type==='income'?'text-green-400':'text-red-400'}`}>{txn.type==='income'?'+':'-'}{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">{cat.name}</p></div>
+            <div className="bg-dark-700 rounded-xl p-4 space-y-3">
+                {txn.note&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Catatan</span><span className="text-sm">{txn.note}</span></div>}
+                <div className="flex justify-between"><span className="text-dark-400 text-sm">Tanggal</span><span className="text-sm">{fmtD(txn.date)}</span></div>
+                <div className="flex justify-between"><span className="text-dark-400 text-sm">Waktu</span><span className="text-sm">{fmtT(txn.createdAt)}</span></div>
+                {txn.isRecurring&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Berulang</span><span className="text-sm text-blue-400 flex items-center gap-1"><I.Repeat/> Tanggal {txn.recurringDay}</span></div>}
+            </div>
+            <button onClick={del} className="w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30">Hapus Transaksi</button>
+        </div>
+    </MW>);
+}
+
+function CatEditM({close,cats,save,type}){
+    const[local,setLocal]=useState(cats);const[nn,setNn]=useState('');
+    const add=()=>{if(!nn.trim())return;setLocal(p=>[...p,{id:genId(),name:nn.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNn('')};
+    const del=id=>setLocal(p=>p.filter(c=>c.id!==id));
+    return(<MW close={close} title={`Edit Kategori ${type==='expense'?'Pengeluaran':'Pemasukan'}`}>
+        <div className="space-y-3">
+            {local.map(c=>(<div key={c.id} className="flex items-center justify-between bg-dark-700 rounded-xl p-3"><div className="flex items-center gap-2"><CatBadge cat={c} size="sm"/><span className="text-sm">{c.name}</span></div><button onClick={()=>del(c.id)} className="text-dark-400"><I.Trash/></button></div>))}
+            <div className="flex gap-2"><input type="text" placeholder="Nama kategori..." value={nn} onChange={e=>setNn(e.target.value)}/><button onClick={add} className="bg-blue-600 text-white px-4 rounded-lg text-sm">+</button></div>
+            <button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 mt-2">Simpan</button>
+        </div>
+    </MW>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
