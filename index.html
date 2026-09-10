@@ -60,6 +60,20 @@
 <body class="min-h-screen max-w-md mx-auto relative">
 <div id="root"></div>
 
+<!-- Install Banner -->
+<div id="installBanner" class="fixed bottom-20 left-0 right-0 max-w-md mx-auto px-4 z-30 hidden">
+  <div class="bg-blue-600 rounded-2xl p-4 flex items-center justify-between shadow-lg">
+    <div>
+      <p class="font-semibold text-sm text-white">Install NataHidup</p>
+      <p class="text-blue-200 text-xs">Jalankan seperti aplikasi native</p>
+    </div>
+    <div class="flex gap-2">
+      <button id="installBtn" class="bg-white text-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">Install</button>
+      <button id="dismissBtn" class="text-white p-2">✕</button>
+    </div>
+  </div>
+</div>
+
 <!-- React & Babel -->
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -74,12 +88,42 @@
                 .catch(err => console.log('SW registration failed:', err));
         });
     }
+
+    // Install Banner Logic
+    let deferredPrompt;
+    const banner = document.getElementById('installBanner');
+    const installBtn = document.getElementById('installBtn');
+    const dismissBtn = document.getElementById('dismissBtn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        banner.classList.remove('hidden');
+    });
+
+    installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            deferredPrompt = null;
+            banner.classList.add('hidden');
+        }
+    });
+
+    dismissBtn.addEventListener('click', () => {
+        banner.classList.add('hidden');
+    });
+
+    window.addEventListener('appinstalled', () => {
+        banner.classList.add('hidden');
+        deferredPrompt = null;
+    });
 </script>
 
 <script type="text/babel">
 const{useState,useEffect,useCallback,useMemo,useRef}=React;
 
-/* ── Utilities ── */
+/* ─ Utilities ── */
 const fmtC=a=>new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',minimumFractionDigits:0,maximumFractionDigits:0}).format(a);
 const fmtD=d=>new Date(d).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
 const fmtT=d=>new Date(d).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
@@ -94,7 +138,7 @@ function useLS(k,v){
     return[s,sv];
 }
 
-/* ── SVG Icons (tanpa emoji) ── */
+/* ── SVG Icons ── */
 const I={
     Home:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
     Notes:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
@@ -122,7 +166,7 @@ const I={
     Star:()=><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>,
 };
 
-/* ── Category Badge ── */
+/* ── Category Badge ─ */
 function CatBadge({cat,size='md'}){
     const letter=cat?.name?.charAt(0)?.toUpperCase()||'?';
     const sz={sm:'w-6 h-6 text-[10px]',md:'w-8 h-8 text-xs',lg:'w-10 h-10 text-sm'};
@@ -307,7 +351,6 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 <h1 className="text-2xl font-bold mt-1">{g}</h1>
             </div>
 
-            {/* Streak */}
             {streak.current>0&&(
                 <div className="bg-gradient-to-r from-orange-600/20 to-amber-600/20 border border-orange-500/30 rounded-2xl p-4 flex items-center gap-4">
                     <div className="w-12 h-12 rounded-xl bg-orange-500/20 flex items-center justify-center text-orange-400"><I.Flame/></div>
@@ -318,7 +361,6 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 </div>
             )}
 
-            {/* Balance */}
             <div className="bg-gradient-to-br from-blue-600 to-purple-700 rounded-2xl p-5 shadow-lg shadow-blue-600/20">
                 <p className="text-blue-200 text-sm">Total Saldo</p>
                 <p className="text-3xl font-bold mt-1">{fmtC(totalBal)}</p>
@@ -328,7 +370,6 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 </div>
             </div>
 
-            {/* Remaining */}
             <div className="bg-dark-700 rounded-2xl p-4">
                 <div className="flex justify-between items-center mb-3">
                     <h3 className="font-semibold text-sm">Sisa Budget Bulan Ini</h3>
@@ -343,7 +384,6 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 </div>
             </div>
 
-            {/* Warnings */}
             {warnings.length>0&&(
                 <div className="bg-dark-700 rounded-2xl p-4">
                     <h3 className="font-semibold text-sm mb-3 flex items-center gap-2 text-yellow-400"><I.Alert/> Peringatan Budget</h3>
@@ -365,7 +405,6 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 </div>
             )}
 
-            {/* Today */}
             <div className="bg-dark-700 rounded-2xl p-4">
                 <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><I.Cal/> Hari Ini</h3>
                 <div className="flex justify-between items-center mb-3 pb-3 border-b border-dark-600">
