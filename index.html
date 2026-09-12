@@ -13,12 +13,9 @@
     <link rel="apple-touch-icon" href="./icons/icon-192x192.png">
     <title>NataHidup</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- LIBRARY BARU UNTUK FITUR P2P SYNC & BUDGET LINK -->
     <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
-
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -64,12 +61,13 @@
         .page-enter{animation:pageIn .25s ease-out}
         @keyframes pageIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
     </style>
+<base target="_blank">
 </head>
 <body class="min-h-screen max-w-md mx-auto relative">
 <div id="root"></div>
 
-<div id="installBanner" class="fixed bottom-20 left-0 right-0 max-w-md mx-auto px-4 z-30 hidden">
-  <div class="bg-blue-600 rounded-2xl p-4 flex items-center justify-between shadow-lg">
+<div id="installBanner" class="fixed bottom-20 left-0 right-0 max-w-md mx-auto px-4 z-30 hidden pointer-events-none">
+  <div class="bg-blue-600 rounded-2xl p-4 flex items-center justify-between shadow-lg pointer-events-auto">
     <div><p class="font-semibold text-sm text-white">Install NataHidup</p><p class="text-blue-200 text-xs">Jalankan seperti aplikasi native</p></div>
     <div class="flex gap-2">
       <button id="installBtn" class="bg-white text-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">Install</button>
@@ -100,6 +98,8 @@
         deferredPrompt = e;
         window.deferredPrompt = e;
         banner.classList.remove('hidden');
+        clearTimeout(window.__nhBannerTimer);
+        window.__nhBannerTimer = setTimeout(() => banner.classList.add('hidden'), 8000);
     });
     installBtn.addEventListener('click', async () => {
         if (deferredPrompt) {
@@ -126,6 +126,13 @@ const genId=()=>Date.now().toString(36)+Math.random().toString(36).substr(2);
 const getToday=()=>new Date().toISOString().split('T')[0];
 const getMY=()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`};
 const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
+// Kalkulator input nominal: evaluasi ekspresi sederhana seperti "50000+12000"
+const evalAmt=s=>{try{if(!/[+\-*/]/.test(s))return parseFloat(s);if(!/^[\d+\-*/().\s]+$/.test(s)||!/\d/.test(s))return NaN;const r=Function('"use strict";return('+s+')')();return typeof r==='number'&&isFinite(r)?Math.round(r):NaN;}catch(e){return NaN;}};
+// SDP Munging: buang ice-candidate IPv6/non-UDP agar QR lebih kecil & mudah dipindai
+const mungeSdp=sdp=>{try{return sdp.split(/\r?\n/).filter(line=>{if(!line.startsWith('a=candidate'))return true;const p=line.split(' ');const addr=p[4]||'';return p[2]==='udp'&&addr!==''&&!addr.includes(':');}).join('\r\n');}catch(e){return sdp;}};
+
+// POIN 5: Helper Haptic Feedback
+const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
 
 function useLS(k,v){
     const[s,set]=useState(()=>{try{const i=localStorage.getItem(k);return i?JSON.parse(i):v}catch{return v}});
@@ -235,11 +242,26 @@ const DEF_BUDGETS=[
 ];
 
 function App(){
+    // POIN 3: Maintenance Mode Toggle
+    const MAINTENANCE_MODE = false; // Ubah ke true untuk mengaktifkan maintenance
+
+    if (MAINTENANCE_MODE) {
+        return (
+            <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 mb-6">
+                    <I.Gear />
+                </div>
+                <h1 className="text-2xl font-bold text-white mb-2">Sedang Maintenance 🛠️</h1>
+                <p className="text-dark-400 text-sm">Aplikasi sedang diperbarui oleh developer. Silakan kembali lagi nanti!</p>
+            </div>
+        );
+    }
+
     const[tab,setTab]=useState('home');const[modal,setModal]=useState(null);const[mData,setMData]=useState(null);
     const[wallets,setWallets]=useLS('nh_w',DEF_WALLETS);
     const[txns,setTxns]=useLS('nh_tx',[]);
     const[budgets,setBudgets]=useLS('nh_bg',DEF_BUDGETS);
-    const[wish,setWish]=useLS('nh_wl',[]);
+    // POIN 4: State Wishlist DIHAPUS
     const[notes,setNotes]=useLS('nh_n',[]);
     const[todos,setTodos]=useLS('nh_td',[]);
     const[debts,setDebts]=useLS('nh_db',[]);
@@ -247,6 +269,14 @@ function App(){
     const[incCats,setIncCats]=useLS('nh_ic',DEF_INC_CAT);
     const[streak,setStreak]=useLS('nh_sk',{current:0,longest:0,lastDate:null,celebratedAt:[]});
     const[pageKey,setPageKey]=useState(0);
+    
+    // POIN 2: State untuk mencegah race condition pada penghapusan
+    const [isDeleting, setIsDeleting] = useState(false);
+    // Undo Snackbar: penghapusan transaksi ditunda 3 detik
+    const undoTimer = useRef(null);
+    const [undoTxn, setUndoTxn] = useState(null);
+    useEffect(() => () => clearTimeout(undoTimer.current), []);
+
     const allCats=useMemo(()=>[...expCats,...incCats],[expCats,incCats]);
     const getCat=id=>allCats.find(c=>c.id===id);
     const totalBal=useMemo(()=>wallets.reduce((s,w)=>s+w.balance,0),[wallets]);
@@ -307,26 +337,56 @@ function App(){
         }
     };
 
-    const delTxn=id=>{
-        const t=txns.find(x=>x.id===id);
-        if(t?.type==='transfer'){
-            setWallets(p=>p.map(w=>{
-                if(w.id===t.transferFrom) return {...w, balance: w.balance + t.amount};
-                if(w.id===t.transferTo) return {...w, balance: w.balance - t.amount};
-                return w;
-            }));
-        }else if(t?.walletId){
-            setWallets(p=>p.map(w=>w.id===t.walletId?{...w,balance:w.balance+(t.type==='income'?-t.amount:t.amount)}:w));
+    // POIN 2: Mencegah duplikasi saat edit transaksi
+    const saveTxn = (t) => {
+        triggerHaptic();
+        if (mData?.id) {
+            // Mode Edit: Update berdasarkan ID yang sama, jangan buat ID baru
+            setTxns(p => p.map(tx => tx.id === mData.id ? { ...t, id: mData.id, createdAt: tx.createdAt } : tx));
+        } else {
+            // Mode Tambah Baru
+            addTxn(t);
         }
-        setTxns(p=>p.filter(x=>x.id!==id));
+        closeM();
     };
 
-    const addNote=n=>setNotes(p=>[{...n,id:genId(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);
+    // POIN 2 + Undo Snackbar: hapus ditunda 3 detik, pengguna bisa tekan Undo
+    const delTxn = (id, callback) => {
+        if (isDeleting || !id) return;
+        const t = txns.find(x => x.id === id);
+        if (!t) return;
+        triggerHaptic();
+        setIsDeleting(true);
+        setUndoTxn({ txn: t });
+        if (callback) callback();
+        clearTimeout(undoTimer.current);
+        undoTimer.current = setTimeout(() => {
+            if (t.type === 'transfer') {
+                setWallets(p => p.map(w => {
+                    if (w.id === t.transferFrom) return { ...w, balance: w.balance + t.amount };
+                    if (w.id === t.transferTo) return { ...w, balance: w.balance - t.amount };
+                    return w;
+                }));
+            } else if (t.walletId) {
+                setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? -t.amount : t.amount) } : w));
+            }
+            setTxns(p => p.filter(x => x.id !== id));
+            setUndoTxn(null);
+            setIsDeleting(false);
+        }, 3000);
+    };
+
+    const undoDelete = () => {
+        clearTimeout(undoTimer.current);
+        setUndoTxn(null);
+        setIsDeleting(false);
+    };
+
+    const addNote=n=>{triggerHaptic();setNotes(p=>[{...n,id:genId(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);};
     const updNote=(id,u)=>setNotes(p=>p.map(n=>n.id===id?{...n,...u,updatedAt:new Date().toISOString()}:n));
     const delNote=id=>setNotes(p=>p.filter(n=>n.id!==id));
     
-    // FITUR BUDGET LINK: Modifikasi addTodo & togTodo
-    const addTodo=t=>setTodos(p=>[{...t,id:genId(),completed:false,createdAt:new Date().toISOString()},...p]);
+    const addTodo=t=>{triggerHaptic();setTodos(p=>[{...t,id:genId(),completed:false,createdAt:new Date().toISOString()},...p]);};
     const togTodo=id=>{
         const todo = todos.find(t => t.id === id);
         if (todo && !todo.completed && todo.budget > 0) {
@@ -358,11 +418,10 @@ function App(){
         closeM();
     };
 
-    const addWish=w=>setWish(p=>[{...w,id:genId(),createdAt:new Date().toISOString()},...p]);
-    const delWish=id=>setWish(p=>p.filter(w=>w.id!==id));
-    const addDebt=d=>setDebts(p=>[{...d,id:genId(),status:'pending',createdAt:new Date().toISOString()},...p]);
+    const addDebt=d=>{triggerHaptic();setDebts(p=>[{...d,id:genId(),status:'pending',createdAt:new Date().toISOString()},...p]);};
     const togDebt=id=>setDebts(p=>p.map(d=>d.id===id?{...d,status:d.status==='pending'?'paid':'pending'}:d));
     const delDebt=id=>setDebts(p=>p.filter(d=>d.id!==id));
+    
     const openM=(t,d=null)=>{setMData(d);setModal(t)};
     const closeM=()=>{setModal(null);setMData(null)};
     
@@ -381,43 +440,100 @@ function App(){
     return(
         <div className="pb-20 min-h-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
             <div className="px-4 pt-4 page-enter" key={pageKey}>
-                {tab==='home'&&<Dash totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM}/>}
+                {/* POIN 1: Menambahkan prop wallets={wallets} ke komponen Dash */}
+                {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM}/>}
                 {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM}/>}
-                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} wish={wish} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addWish={addWish} delWish={delWish} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
-                {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} wish={wish} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats} streak={streak} openM={openM}/>}
+                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
+                {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats} streak={streak} openM={openM}/>}
             </div>
-            <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/95 backdrop-blur border-t border-dark-700 px-2 pb-2 pt-1 z-40">
+            
+            {/* POIN 5: Glassmorphism pada Bottom Navigation */}
+            <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
                 <div className="flex items-center justify-around">
                     <NB ic={<I.Home/>} lb="Home" ac={tab==='home'} fn={()=>{setTab('home');setPageKey(k=>k+1)}}/>
                     <NB ic={<I.Notes/>} lb="Notes" ac={tab==='notes'} fn={()=>{setTab('notes');setPageKey(k=>k+1)}}/>
-                    <button onClick={()=>openM('quickAdd')} className={`w-14 h-14 -mt-6 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-600/30 ch text-white ${txns.length===0?'animate-bounce':'fab-p'}`}>
+                    <button onClick={()=>{triggerHaptic();openM('quickAdd')}} className={`w-14 h-14 -mt-6 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-600/30 ch text-white ${txns.length===0?'animate-bounce':'fab-p'}`}>
                         <I.Plus/>
                     </button>
                     <NB ic={<I.Dollar/>} lb="Finance" ac={tab==='finance'} fn={()=>{setTab('finance');setPageKey(k=>k+1)}}/>
                     <NB ic={<I.Gear/>} lb="Setting" ac={tab==='settings'} fn={()=>{setTab('settings');setPageKey(k=>k+1)}}/>
                 </div>
             </nav>
+            
             {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='addTxn'&&<TxnM close={closeM} save={addTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
+            {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
             {modal==='addNote'&&<NoteM close={closeM} save={mData?.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
             {modal==='addWallet'&&<WalletM close={closeM} save={w=>setWallets(p=>[...p,{...w,id:genId(),balance:0}])}/>}
             {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={setBudgets}/>}
-            {modal==='addWish'&&<WishM close={closeM} save={addWish}/>}
+            {/* POIN 4: Modal Wishlist DIHAPUS */}
             {modal==='addDebt'&&<DebtM close={closeM} save={addDebt}/>}
-            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id);closeM()}} getCat={getCat} wallets={wallets}/>}
+            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id, closeM)}} getCat={getCat} wallets={wallets} isDeleting={isDeleting}/>}
             {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} save={mData==='expense'?setExpCats:setIncCats} type={mData}/>}
-            
-            {/* MODAL BARU UNTUK FITUR BUDGET LINK & P2P SYNC */}
             {modal==='todoBudget'&&<TodoBudgetM close={closeM} todo={mData} completeWithExpense={completeTodoWithExpense} skipExpense={skipTodoExpense} wallets={wallets}/>}
-            {modal==='p2pSync'&&<P2PSync close={closeM}/>}
+            {modal==='p2pSync'&&<SyncErrorBoundary close={closeM}><P2PSync close={closeM}/></SyncErrorBoundary>}
+            {/* Undo Snackbar: muncul 3 detik sebelum penghapusan permanen */}
+            {undoTxn&&(
+                <div className="fixed bottom-24 left-0 right-0 max-w-md mx-auto px-4 z-50 pointer-events-none">
+                    <div className="pointer-events-auto bg-dark-700/95 backdrop-blur border border-white/10 rounded-2xl p-3 flex items-center justify-between shadow-2xl modal-ct">
+                        <span className="text-sm">🗑️ Transaksi dihapus</span>
+                        <button onClick={undoDelete} className="text-blue-400 text-sm font-bold px-3 py-1">UNDO</button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Error Boundary: jika modul P2P/QR gagal dimuat, aplikasi tidak white-screen
+class SyncErrorBoundary extends React.Component {
+    constructor(props){super(props);this.state={hasError:false};}
+    static getDerivedStateFromError(){return{hasError:true};}
+    componentDidCatch(err,info){console.error('P2P Sync error:',err,info);}
+    render(){
+        if(this.state.hasError){
+            return(
+                <div className="fixed inset-0 z-50 flex items-center justify-center modal-ov" onClick={this.props.close}>
+                    <div className="absolute inset-0 bg-black/60"/>
+                    <div className="relative w-full max-w-md bg-dark-800 rounded-3xl p-6 text-center modal-ct mx-4" onClick={e=>e.stopPropagation()}>
+                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-yellow-400 text-2xl">⚠️</div>
+                        <p className="font-bold text-lg mb-2">Modul Sinkronisasi Gagal Dimuat</p>
+                        <p className="text-dark-400 text-sm mb-5">Jangan khawatir, data Anda aman. Gunakan tombol Ekspor / Impor JSON di Pengaturan sebagai jalur alternatif yang 100% offline.</p>
+                        <button onClick={this.props.close} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600">Tutup</button>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+// Blok umpan balik besar saat kamera gagal diakses, dengan opsi tempel teks SDP manual
+function CamError({onBack,onPaste,pasteValue,setPaste}){
+    return(
+        <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 text-center space-y-3">
+            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto text-red-400">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+            </div>
+            <p className="font-bold text-red-400 text-sm">Kamera Tidak Bisa Diakses</p>
+            <div className="text-left text-xs text-dark-300 space-y-1.5 bg-dark-900/60 rounded-xl p-3.5 leading-relaxed">
+                <p>1. Ketuk ikon <b>gembok 🔒</b> di address bar browser.</p>
+                <p>2. Buka <b>Izin Situs / Site settings</b> → <b>Kamera</b> → pilih <b>Izinkan</b>.</p>
+                <p>3. Kembali ke aplikasi, tutup lalu buka lagi menu sinkronisasi.</p>
+            </div>
+            {onPaste&&(<>
+                <p className="text-[11px] text-dark-400">Tanpa kamera: minta pengirim menekan "Salin Teks" di QR-nya, kirim via WA/Telegram, lalu tempel di sini.</p>
+                <textarea rows={3} placeholder="Tempel teks SDP di sini..." value={pasteValue} onChange={e=>setPaste(e.target.value)} className="text-[10px] leading-tight"/>
+                <button type="button" disabled={!pasteValue.trim()} onClick={()=>onPaste(pasteValue.trim())} className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white ${pasteValue.trim()?'bg-green-600':'bg-dark-600 text-dark-400'}`}>Proses Teks</button>
+            </>)}
+            <button type="button" onClick={onBack} className="w-full py-2 rounded-xl bg-dark-600 text-sm text-dark-300">Kembali</button>
         </div>
     );
 }
 
 function NB({ic,lb,ac,fn}){return<button onClick={fn} className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all ${ac?'text-blue-400':'text-dark-400'}`}>{ic}<span className="text-[10px] mt-1 font-medium">{lb}</span></button>}
 
-/* ... (Komponen Dash, FinMod, FinOverview, TxnList, BudgetView, WishView, DebtView tetap sama persis seperti asli Anda) ... */
-function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets,catSpend,streak,allCats,openM}){
+// POIN 1: Komponen Dash sekarang menerima prop 'wallets'
+function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, todos, budgets, catSpend, streak, allCats, openM}){
     const now=new Date();const g=now.getHours()<12?'Selamat Pagi':now.getHours()<18?'Selamat Siang':'Selamat Malam';
     const dn=now.toLocaleDateString('id-ID',{weekday:'long'});
     const pendTodos=todos.filter(t=>!t.completed).slice(0,4);
@@ -494,6 +610,7 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
                 {todayTxns.length>0?(
                     <div className="space-y-2">{todayTxns.slice(0,3).map(t=>{
                         if(t.type==='transfer'){
+                            // POIN 1: wallets.find sekarang AMAN karena wallets bukan undefined
                             const fromW=wallets.find(w=>w.id===t.transferFrom);
                             const toW=wallets.find(w=>w.id===t.transferTo);
                             return(<div key={t.id} className="flex items-center gap-3 py-1"><div className="w-6 h-6 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Transfer/></div><div className="flex-1 min-w-0"><p className="text-sm truncate">Transfer: {fromW?.name} → {toW?.name}</p></div><span className="text-sm font-semibold text-blue-400">{fmtC(t.amount)}</span></div>);
@@ -511,20 +628,22 @@ function Dash({totalBal,mIncome,mExpense,remain,todayExp,todayTxns,todos,budgets
     );
 }
 
-function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,wish,debts,totalBal,allCats,getCat,setWallets,setBudgets,addWish,delWish,addDebt,togDebt,delDebt,delTxn,openM}){
+// POIN 4: Prop wishlist dihapus dari FinMod
+function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,totalBal,allCats,getCat,setWallets,setBudgets,addDebt,togDebt,delDebt,delTxn,openM}){
     const[sub,setSub]=useState('overview');
     return(
         <div className="space-y-4">
             <div className="pt-2"><h1 className="text-2xl font-bold">Keuangan</h1><p className="text-dark-400 text-sm mt-1">Kelola keuanganmu dengan bijak</p></div>
             <div className="flex gap-1 bg-dark-700 rounded-xl p-1 overflow-x-auto sb-hide">
-                {[{id:'overview',l:'Ringkasan'},{id:'transactions',l:'Transaksi'},{id:'budget',l:'Budget'},{id:'wishlist',l:'Wishlist'},{id:'debts',l:'Hutang'}].map(t=>(
+                {/* POIN 4: Tab Wishlist DIHAPUS dari array */}
+                {[{id:'overview',l:'Ringkasan'},{id:'transactions',l:'Transaksi'},{id:'budget',l:'Budget'},{id:'debts',l:'Hutang'}].map(t=>(
                     <button key={t.id} onClick={()=>setSub(t.id)} className={`px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${sub===t.id?'bg-blue-600 text-white':'text-dark-400'}`}>{t.l}</button>
                 ))}
             </div>
             {sub==='overview'&&<FinOverview wallets={wallets} mIncome={mIncome} mExpense={mExpense} totalBal={totalBal} catSpend={catSpend} allCats={allCats} txns={txns} openM={openM}/>}
             {sub==='transactions'&&<TxnList txns={txns} getCat={getCat} openM={openM} delTxn={delTxn} wallets={wallets}/>}
             {sub==='budget'&&<BudgetView budgets={budgets} catSpend={catSpend} allCats={allCats} openM={openM}/>}
-            {sub==='wishlist'&&<WishView wish={wish} totalBal={totalBal} openM={openM} del={delWish}/>}
+            {/* POIN 4: Render komponen Wishlist DIHAPUS */}
             {sub==='debts'&&<DebtView debts={debts} openM={openM} tog={togDebt} del={delDebt}/>}
         </div>
     );
@@ -554,13 +673,14 @@ function FinOverview({wallets,mIncome,mExpense,totalBal,catSpend,allCats,txns,op
 }
 
 function TxnList({txns,getCat,openM,delTxn,wallets}){
-    const[filter,setFilter]=useState('all');
-    const filtered=useMemo(()=>{if(filter==='all') return txns;return txns.filter(t=>t.type===filter)},[txns,filter]);
+    const[filter,setFilter]=useState('all');const[q,setQ]=useState('');
+    const filtered=useMemo(()=>{let f=txns;if(filter!=='all')f=f.filter(t=>t.type===filter);if(q.trim()){const s=q.toLowerCase();f=f.filter(t=>(t.note||'').toLowerCase().includes(s)||(t.category||'').toLowerCase().includes(s));}return f;},[txns,filter,q]);
     const grouped=useMemo(()=>{const g={};filtered.forEach(t=>{if(!g[t.date])g[t.date]=[];g[t.date].push(t)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0]))},[filtered]);
     const isEmpty = filtered.length === 0;
 
     return(
         <div className="space-y-4">
+            <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"><I.Search/></span><input type="text" placeholder="Cari berdasarkan catatan..." value={q} onChange={e=>setQ(e.target.value)} className="pl-10"/></div>
             <div className="flex gap-2 overflow-x-auto sb-hide">{[{id:'all',l:'Semua'},{id:'expense',l:'Keluar'},{id:'income',l:'Masuk'},{id:'transfer',l:'Transfer'}].map(f=>(<button key={f.id} onClick={()=>setFilter(f.id)} className={`px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${filter===f.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{f.l}</button>))}</div>
             
             {isEmpty ? (
@@ -568,7 +688,7 @@ function TxnList({txns,getCat,openM,delTxn,wallets}){
                     <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-400">
                         <I.Dollar />
                     </div>
-                    <p className="text-dark-300 font-medium mb-1">Keuanganmu masih kosong</p>
+                    <p className="text-dark-300 font-medium mb-1">{q.trim()?`Tidak ditemukan: "${q}"`:'Keuanganmu masih kosong'}</p>
                     <p className="text-dark-500 text-xs mb-6">Yuk, catat pemasukan atau pengeluaran pertamamu!</p>
                     <div className="absolute -bottom-10 left-1/2 -translate-x-4 opacity-50">
                         <svg width="40" height="60" viewBox="0 0 40 60" fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round">
@@ -629,20 +749,7 @@ function BudgetView({budgets,catSpend,allCats,openM}){
     );
 }
 
-function WishView({wish,totalBal,openM,del}){
-    const now=Date.now();
-    return(
-        <div className="space-y-4">
-            <div className="flex justify-between items-center"><p className="text-dark-400 text-sm">Barang yang ingin dibeli</p><button onClick={()=>openM('addWish')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">+ Tambah</button></div>
-            {wish.length>0?<div className="space-y-3">{wish.map(w=>{
-                const age=now-new Date(w.createdAt).getTime();const ready=age>=86400000;
-                const canBuy=totalBal>=w.price&&ready;
-                const hrs=Math.max(0,Math.ceil((86400000-age)/3600000));
-                return(<div key={w.id} className="bg-dark-700 rounded-xl p-4"><div className="flex justify-between items-start"><div className="flex-1"><p className="font-medium text-sm">{w.name}</p><p className="text-blue-400 font-bold mt-1">{fmtC(w.price)}</p>{w.note&&<p className="text-dark-400 text-xs mt-1">{w.note}</p>}{!ready&&<p className="text-yellow-400 text-xs mt-2 flex items-center gap-1"><I.Clock/> Jeda anti-impulsif: {hrs} jam lagi</p>}</div><div className="flex items-center gap-2"><span className={`text-[10px] px-2 py-1 rounded-full font-medium ${canBuy?'bg-green-500/20 text-green-400':!ready?'bg-yellow-500/20 text-yellow-400':'bg-dark-600 text-dark-400'}`}>{canBuy?'Bisa beli':!ready?'Tunggu':'Dana kurang'}</span><button onClick={()=>del(w.id)} className="text-dark-400 p-1"><I.Trash/></button></div></div></div>);
-            })}</div>:(<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Wishlist kosong</p></div>)}
-        </div>
-    );
-}
+// POIN 4: Komponen WishView DIHAPUS SEPENUHNYA
 
 function DebtView({debts,openM,tog,del}){
     const pending=debts.filter(d=>d.status==='pending');const paid=debts.filter(d=>d.status==='paid');
@@ -689,7 +796,6 @@ function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,o
     );
 }
 
-// FITUR BUDGET LINK: Input budget ditambahkan di sini
 function TodoQuick({ add }) {
     const [t, setT] = useState('');
     const [deadline, setDeadline] = useState('');
@@ -714,7 +820,6 @@ function TodoQuick({ add }) {
     );
 }
 
-// FITUR BUDGET LINK: Tampilan estimasi biaya ditambahkan di sini
 function TodoItem({ t, tog }) {
     return (
         <div className={`bg-dark-700 rounded-xl p-3 flex items-center gap-3 ${t.completed ? 'opacity-50' : ''}`}>
@@ -732,30 +837,60 @@ function TodoItem({ t, tog }) {
     );
 }
 
-function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,wish,debts,expCats,incCats,setExpCats,setIncCats,streak,openM}){
+// POIN 4: Prop 'wish' dihapus dari SetMod
+function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,expCats,incCats,setExpCats,setIncCats,streak,openM}){
     const[isInstalled,setIsInstalled]=useState(false);
     useEffect(()=>{if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone){setIsInstalled(true)}},[]);
     const handleInstall=async()=>{
         if(window.deferredPrompt){window.deferredPrompt.prompt();const{outcome}=await window.deferredPrompt.userChoice;window.deferredPrompt=null;}
         else{alert('Untuk menginstall: buka menu browser (titik tiga) → "Install App" atau "Add to Home Screen"');}
     };
-    const exp=()=>{const d={wallets,txns,budgets,notes,todos,wish,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
+    // POIN 4: 'wish' dihapus dari objek export
+    const exp=()=>{const d={wallets,txns,budgets,notes,todos,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
+    const imp=()=>{const fi=document.getElementById('nhImportFile');if(fi)fi.click();};
+    const onImpFile=e=>{
+        const file=e.target.files&&e.target.files[0];e.target.value='';if(!file)return;
+        const reader=new FileReader();
+        reader.onload=ev=>{
+            try{
+                const d=JSON.parse(ev.target.result);
+                const map={wallets:'nh_w',txns:'nh_tx',budgets:'nh_bg',notes:'nh_n',todos:'nh_td',debts:'nh_db',expCats:'nh_ec',incCats:'nh_ic',streak:'nh_sk'};
+                let n=0;
+                Object.entries(map).forEach(([src,dst])=>{if(d[src]!==undefined){localStorage.setItem(dst,JSON.stringify(d[src]));n++;}});
+                ['nh_w','nh_tx','nh_bg','nh_n','nh_td','nh_db','nh_ec','nh_ic','nh_sk'].forEach(k=>{if(d[k]!==undefined){localStorage.setItem(k,d[k]);n++;}});
+                if(!n)throw new Error('empty');
+                if(confirm(`Impor berhasil (${n} grup data). Muat ulang sekarang?`))location.reload();
+            }catch(err){alert('File tidak valid. Gunakan file hasil Ekspor NataHidup.');}
+        };
+        reader.readAsText(file);
+    };
     const reset=()=>{if(confirm('Hapus semua data? Tindakan ini tidak bisa dibatalkan.')){localStorage.clear();location.reload()}};
     return(
         <div className="space-y-4">
             <div className="pt-2"><h1 className="text-2xl font-bold">Pengaturan</h1><p className="text-dark-400 text-sm mt-1">Kelola aplikasi NataHidup</p></div>
-            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v2.1.1</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
+            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v2.2.0</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
             {!isInstalled&&(<button onClick={handleInstall} className="w-full bg-blue-600 hover:bg-blue-700 rounded-2xl p-4 flex items-center justify-center gap-3 ch"><I.DL/><span className="font-semibold text-sm">Install App ke Homescreen</span></button>)}
             <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Kategori</h3><div className="space-y-3"><CatEditInline cats={expCats} set={setExpCats} type="expense"/><CatEditInline cats={incCats} set={setIncCats} type="income"/></div></div>
-            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Statistik</h3><div className="space-y-2"><div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div><div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div><div className="flex justify-between text-sm"><span className="text-dark-400">To-Do</span><span>{todos.length}</span></div><div className="flex justify-between text-sm"><span className="text-dark-400">Wishlist</span><span>{wish.length}</span></div><div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div><div className="flex justify-between text-sm"><span className="text-dark-400">Streak Terpanjang</span><span>{streak.longest} hari</span></div></div></div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Statistik</h3><div className="space-y-2">
+                <div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-dark-400">To-Do</span><span>{todos.length}</span></div>
+                {/* POIN 4: Statistik Wishlist DIHAPUS */}
+                <div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-dark-400">Streak Terpanjang</span><span>{streak.longest} hari</span></div>
+            </div></div>
             
-            {/* FITUR P2P SYNC: Tombol ditambahkan di sini */}
             <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
                 <h3 className="font-semibold text-sm">Data & Sinkronisasi</h3>
                 <button onClick={() => openM('p2pSync')} className="w-full flex items-center gap-3 py-3 px-4 bg-blue-600/20 text-blue-400 rounded-xl text-sm ch border border-blue-500/30">
                     <I.Transfer />
                     <span>Sinkronisasi P2P (Tanpa Server)</span>
                 </button>
+                <button onClick={imp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
+                    <I.Up />
+                    <span>Impor Data (JSON)</span>
+                </button>
+                <input id="nhImportFile" type="file" accept=".json,application/json" className="hidden" onChange={onImpFile} />
                 <button onClick={exp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
                     <I.DL />
                     <span>Ekspor Data (JSON)</span>
@@ -795,6 +930,7 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
     const[recurring,setRec]=useState(ed?.isRecurring||false);
     const[recDay,setRecDay]=useState(ed?.recurringDay||new Date().getDate());
     const cats=type==='expense'?expCats:incCats;
+    const amtVal=evalAmt(amt);const amtOk=!isNaN(amtVal)&&amtVal>0;const showCalc=amtOk&&/[+\-*/]/.test(amt);
     
     useEffect(()=>{
         if(type==='transfer' && transferFrom===transferTo && wallets.length>1){
@@ -805,15 +941,14 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
 
     const sub=e=>{
         e.preventDefault();
-        if(!amt)return;
+        if(!amtOk)return;
         if(type==='transfer'){
             if(!transferFrom||!transferTo||transferFrom===transferTo)return;
-            save({type:'transfer',amount:parseFloat(amt),note,transferFrom,transferTo,date});
+            save({type:'transfer',amount:amtVal,note,transferFrom,transferTo,date});
         }else{
             if(!cat)return;
-            save({type,amount:parseFloat(amt),category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null});
+            save({type,amount:amtVal,category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null});
         }
-        close();
     };
     
     return(<MW close={close} title={ed?'Edit Transaksi':'Tambah Transaksi'}>
@@ -823,7 +958,7 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
                 <button type="button" onClick={()=>{setType('income');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='income'?'bg-green-500 text-white':'text-dark-400'}`}>Masuk</button>
                 <button type="button" onClick={()=>setType('transfer')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='transfer'?'bg-blue-500 text-white':'text-dark-400'}`}>Transfer</button>
             </div>
-            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/></div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp) — bisa ketik hitungan, misal: 50000+12000</label><input type="text" inputMode="decimal" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
             {type==='transfer'?(
                 <>
                     <div><label className="text-xs text-dark-400 mb-1 block">Dari Dompet</label><select value={transferFrom} onChange={e=>setTransferFrom(e.target.value)}>{wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}</select></div>
@@ -851,7 +986,7 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
                     {recurring&&<div><label className="text-xs text-dark-400 mb-1 block">Tanggal Berulang (tiap bulan)</label><input type="number" min="1" max="28" value={recDay} onChange={e=>setRecDay(parseInt(e.target.value)||1)}/></div>}
                 </>
             )}
-            <button type="submit" disabled={!amt||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amt||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
+            <button type="submit" disabled={!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
         </form>
     </MW>);
 }
@@ -875,11 +1010,7 @@ function BudgetM({close,budgets,expCats,save}){
     return(<MW close={close} title="Atur Budget"><div className="space-y-4"><p className="text-dark-400 text-xs">Atur limit, periode, dan kategori yang dipantau.</p>{local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};const trackedCats=b.categories||[b.category];return(<div key={b.id} className="bg-dark-700 rounded-xl p-3 space-y-3"><div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div><div><label className="text-[10px] text-dark-400 mb-1 block">Limit</label><input type="number" value={b.limit} onChange={e=>upd(b.id,'limit',e.target.value)} className="text-sm"/></div><div><label className="text-[10px] text-dark-400 mb-1 block">Periode</label><select value={b.period||'monthly'} onChange={e=>upd(b.id,'period',e.target.value)} className="text-sm"><option value="weekly">Mingguan</option><option value="monthly">Bulanan</option><option value="custom">Custom</option></select></div><div><label className="text-[10px] text-dark-400 mb-1 block">Kategori Dipantau</label><div className="flex flex-wrap gap-1.5">{expCats.map(ec=>(<button key={ec.id} type="button" onClick={()=>toggleCategory(b.id,ec.id)} className={`px-2 py-1 rounded text-[10px] transition-all ${trackedCats.includes(ec.id)?'bg-blue-500/30 text-blue-300 border border-blue-500/50':'bg-dark-600 text-dark-400 border border-transparent'}`}>{ec.name}</button>))}</div></div></div>)})}<button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></div></MW>);
 }
 
-function WishM({close,save}){
-    const[name,setName]=useState('');const[price,setPrice]=useState('');const[note,setNote]=useState('');
-    const sub=e=>{e.preventDefault();if(!name.trim()||!price)return;save({name:name.trim(),price:parseFloat(price),note:note.trim()});close()};
-    return(<MW close={close} title="Tambah Wishlist"><form onSubmit={sub} className="space-y-4"><div><label className="text-xs text-dark-400 mb-1 block">Nama Barang</label><input type="text" placeholder="Contoh: Headphone Sony" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Harga (Rp)</label><input type="number" placeholder="0" value={price} onChange={e=>setPrice(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan (opsional)</label><input type="text" placeholder="Link, warna, dll" value={note} onChange={e=>setNote(e.target.value)}/></div><div className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-3"><p className="text-xs text-yellow-400 flex items-center gap-1"><I.Clock/> Setelah ditambahkan, ada jeda 24 jam sebelum tombol "Bisa beli" aktif. Ini membantumu menghindari pembelian impulsif.</p></div><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Tambah</button></form></MW>);
-}
+// POIN 4: Komponen WishM DIHAPUS SEPENUHNYA
 
 function DebtM({close,save}){
     const[name,setName]=useState('');const[dtype,setDtype]=useState('hutang');const[amt,setAmt]=useState('');const[due,setDue]=useState('');const[note,setNote]=useState('');
@@ -887,11 +1018,16 @@ function DebtM({close,save}){
     return(<MW close={close} title="Tambah Hutang / Piutang"><form onSubmit={sub} className="space-y-4"><div className="flex gap-2 bg-dark-700 rounded-xl p-1"><button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang</button><button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang</button></div><div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
 }
 
-function TxnDetailM({txn,close,del,getCat,wallets}){
+function TxnDetailM({txn,close,del,getCat,wallets,isDeleting}){
     const cat=getCat(txn.category)||{name:txn.category,color:'#6b7280'};
     const fromW=wallets.find(w=>w.id===txn.transferFrom);
     const toW=wallets.find(w=>w.id===txn.transferTo);
-    return(<MW close={close} title="Detail Transaksi"><div className="space-y-4">{txn.type==='transfer'?(<div className="text-center py-4"><div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 mx-auto"><I.Transfer/></div><p className="text-2xl font-bold mt-2 text-blue-400">{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">Transfer</p><p className="text-xs text-dark-500 mt-1">{fromW?.name} → {toW?.name}</p></div>):(<div className="text-center py-4"><CatBadge cat={cat} size="lg"/><p className={`text-2xl font-bold mt-2 ${txn.type==='income'?'text-green-400':'text-red-400'}`}>{txn.type==='income'?'+':'-'}{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">{cat.name}</p></div>)}<div className="bg-dark-700 rounded-xl p-4 space-y-3">{txn.note&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Catatan</span><span className="text-sm">{txn.note}</span></div>}<div className="flex justify-between"><span className="text-dark-400 text-sm">Tanggal</span><span className="text-sm">{fmtD(txn.date)}</span></div><div className="flex justify-between"><span className="text-dark-400 text-sm">Waktu</span><span className="text-sm">{fmtT(txn.createdAt)}</span></div>{txn.type!=='transfer'&&txn.isRecurring&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Berulang</span><span className="text-sm text-blue-400 flex items-center gap-1"><I.Repeat/> Tanggal {txn.recurringDay}</span></div>}</div><button onClick={del} className="w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30">Hapus Transaksi</button></div></MW>);
+    return(<MW close={close} title="Detail Transaksi"><div className="space-y-4">{txn.type==='transfer'?(<div className="text-center py-4"><div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 mx-auto"><I.Transfer/></div><p className="text-2xl font-bold mt-2 text-blue-400">{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">Transfer</p><p className="text-xs text-dark-500 mt-1">{fromW?.name} → {toW?.name}</p></div>):(<div className="text-center py-4"><CatBadge cat={cat} size="lg"/><p className={`text-2xl font-bold mt-2 ${txn.type==='income'?'text-green-400':'text-red-400'}`}>{txn.type==='income'?'+':'-'}{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">{cat.name}</p></div>)}<div className="bg-dark-700 rounded-xl p-4 space-y-3">{txn.note&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Catatan</span><span className="text-sm">{txn.note}</span></div>}<div className="flex justify-between"><span className="text-dark-400 text-sm">Tanggal</span><span className="text-sm">{fmtD(txn.date)}</span></div><div className="flex justify-between"><span className="text-dark-400 text-sm">Waktu</span><span className="text-sm">{fmtT(txn.createdAt)}</span></div>{txn.type!=='transfer'&&txn.isRecurring&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Berulang</span><span className="text-sm text-blue-400 flex items-center gap-1"><I.Repeat/> Tanggal {txn.recurringDay}</span></div>}</div>
+    {/* POIN 2: Tombol hapus dinonaktifkan saat proses penghapusan berlangsung */}
+    <button onClick={del} disabled={isDeleting} className={`w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30 ${isDeleting ? 'opacity-50 cursor-not-allowed' : ''}`}>
+        {isDeleting ? 'Menghapus...' : 'Hapus Transaksi'}
+    </button>
+    </div></MW>);
 }
 
 function CatEditM({close,cats,save,type}){
@@ -901,9 +1037,6 @@ function CatEditM({close,cats,save,type}){
     return(<MW close={close} title={`Edit Kategori ${type==='expense'?'Pengeluaran':'Pemasukan'}`}><div className="space-y-3">{local.map(c=>(<div key={c.id} className="flex items-center justify-between bg-dark-700 rounded-xl p-3"><div className="flex items-center gap-2"><CatBadge cat={c} size="sm"/><span className="text-sm">{c.name}</span></div><button onClick={()=>del(c.id)} className="text-dark-400"><I.Trash/></button></div>))}<div className="flex gap-2"><input type="text" placeholder="Nama kategori..." value={nn} onChange={e=>setNn(e.target.value)}/><button onClick={add} className="bg-blue-600 text-white px-4 rounded-lg text-sm">+</button></div><button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 mt-2">Simpan</button></div></MW>);
 }
 
-// ==========================================
-// FITUR BARU: MODAL KONFIRMASI BUDGET LINK
-// ==========================================
 function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets }) {
     const [realCost, setRealCost] = useState(todo.budget.toString());
     const [walletId, setWalletId] = useState(wallets[0]?.id || '');
@@ -914,7 +1047,7 @@ function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets })
     };
     
     const handleSkip = () => {
-        skipExpense(todo.id);
+        skipTodoExpense(todo.id);
     };
 
     return (
@@ -941,14 +1074,13 @@ function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets })
     );
 }
 
-// ==========================================
-// FITUR BARU: P2P SERVERLESS SYNC
-// ==========================================
 function P2PSync({ close }) {
     const [step, setStep] = useState('menu');
     const [status, setStatus] = useState('');
     const [pc, setPc] = useState(null);
     const [scanner, setScanner] = useState(null);
+    const [camError, setCamError] = useState(false);
+    const [pasteTxt, setPasteTxt] = useState('');
 
     useEffect(() => {
         return () => {
@@ -981,10 +1113,10 @@ function P2PSync({ close }) {
             setStatus('Mengirim data...');
             const payload = {
                 nh_w: localStorage.getItem('nh_w'), nh_tx: localStorage.getItem('nh_tx'),
-                nh_bg: localStorage.getItem('nh_bg'), nh_wl: localStorage.getItem('nh_wl'),
-                nh_n: localStorage.getItem('nh_n'), nh_td: localStorage.getItem('nh_td'),
-                nh_db: localStorage.getItem('nh_db'), nh_ec: localStorage.getItem('nh_ec'),
-                nh_ic: localStorage.getItem('nh_ic'), nh_sk: localStorage.getItem('nh_sk')
+                nh_bg: localStorage.getItem('nh_bg'), nh_n: localStorage.getItem('nh_n'),
+                nh_td: localStorage.getItem('nh_td'), nh_db: localStorage.getItem('nh_db'),
+                nh_ec: localStorage.getItem('nh_ec'), nh_ic: localStorage.getItem('nh_ic'),
+                nh_sk: localStorage.getItem('nh_sk')
             };
             const compressed = LZString.compressToUTF16(JSON.stringify(payload));
             dc.send(compressed);
@@ -992,6 +1124,7 @@ function P2PSync({ close }) {
         };
 
         const offer = await newPc.createOffer();
+        offer.sdp = mungeSdp(offer.sdp);
         await newPc.setLocalDescription(offer);
         await waitForIce(newPc);
         
@@ -1002,7 +1135,9 @@ function P2PSync({ close }) {
 
     const startGuest = () => {
         setStep('guest_scan');
+        setCamError(false);
         setStatus('Arahkan kamera ke QR Code di HP Lama...');
+        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
         setTimeout(() => {
             const html5QrCode = new Html5Qrcode("qr-reader");
             setScanner(html5QrCode);
@@ -1015,11 +1150,12 @@ function P2PSync({ close }) {
                     processOffer(decodedText);
                 },
                 () => {}
-            ).catch(err => setStatus("Gagal akses kamera: " + err));
+            ).catch(() => setCamError(true));
         }, 300);
     };
 
     const processOffer = async (decodedText) => {
+        try {
         setStatus('Memproses koneksi...');
         const newPc = new RTCPeerConnection();
         
@@ -1042,17 +1178,24 @@ function P2PSync({ close }) {
         const offerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(decodedText));
         await newPc.setRemoteDescription(offerSdp);
         const answer = await newPc.createAnswer();
+        answer.sdp = mungeSdp(answer.sdp);
         await newPc.setLocalDescription(answer);
         await waitForIce(newPc);
         
         setPc(newPc);
         setStep('guest_qr');
         setStatus('Scan QR ini dengan HP Lama untuk menyelesaikan');
+        } catch (err) {
+            setStatus('❌ Teks SDP tidak valid. Pastikan salinan lengkap, lalu tempel lagi.');
+            setCamError(true);
+        }
     };
 
     const completeHandshake = () => {
         setStep('host_scan');
+        setCamError(false);
         setStatus('Arahkan kamera ke QR Code di HP Baru...');
+        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
         setTimeout(() => {
             const html5QrCode = new Html5Qrcode("qr-reader");
             setScanner(html5QrCode);
@@ -1067,16 +1210,31 @@ function P2PSync({ close }) {
                     setStatus('Handshake berhasil! Mengirim data...');
                 },
                 () => {}
-            ).catch(err => setStatus("Gagal akses kamera: " + err));
+            ).catch(() => setCamError(true));
         }, 300);
     };
 
     const renderQR = (data) => {
-        const qr = qrcode(0, 'L');
-        const compressed = LZString.compressToEncodedURIComponent(data);
-        qr.addData(compressed);
-        qr.make();
-        return <div className="flex justify-center my-4" dangerouslySetInnerHTML={{ __html: qr.createImgTag(4, 8) }} />;
+        const raw = typeof data === 'string' ? data : JSON.stringify(data);
+        try {
+            if (typeof qrcode !== 'function') throw new Error('Modul QR tidak termuat');
+            const compressed = LZString.compressToEncodedURIComponent(raw);
+            const qr = qrcode(0, 'L');
+            qr.addData(compressed);
+            qr.make();
+            if (qr.getModuleCount() > 120) throw new Error('Data QR terlalu padat untuk dipindai');
+            return <div className="flex justify-center my-4" dangerouslySetInnerHTML={{ __html: qr.createImgTag(4, 8) }} />;
+        } catch (e) {
+            // Fallback manual: salin teks SDP terkompresi, kirim via aplikasi pesan
+            const compressed = LZString.compressToEncodedURIComponent(raw);
+            return (
+                <div className="my-4 space-y-2">
+                    <p className="text-xs text-yellow-400 text-center">⚠️ QR otomatis gagal ({e.message}). Salin teks ini, kirim via WA/Telegram, lalu tempel di HP lain.</p>
+                    <textarea readOnly rows={6} value={compressed} className="text-[10px] leading-tight" onFocus={ev => ev.target.select()} />
+                    <button type="button" onClick={ev => { if (navigator.clipboard) navigator.clipboard.writeText(compressed).then(() => { ev.target.textContent = '✅ Tersalin!'; }).catch(() => {}); }} className="w-full py-2 rounded-lg bg-dark-600 text-xs font-medium">Salin Teks</button>
+                </div>
+            );
+        }
     };
 
     return (
@@ -1100,10 +1258,12 @@ function P2PSync({ close }) {
                 )}
 
                 {step === 'guest_scan' && (
+                    camError ? <CamError onBack={() => { setCamError(false); setStep('menu'); }} onPaste={(txt) => { setCamError(false); processOffer(txt); }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
                     <div className="space-y-3">
                         <p className="text-sm font-medium text-blue-400">{status}</p>
                         <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
                     </div>
+                    )
                 )}
 
                 {step === 'guest_qr' && (
@@ -1114,10 +1274,19 @@ function P2PSync({ close }) {
                 )}
 
                 {step === 'host_scan' && (
+                    camError ? <CamError onBack={() => { setCamError(false); setStep('host_qr'); }} onPaste={async (txt) => {
+                        try {
+                            const answerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(txt));
+                            await pc.setRemoteDescription(answerSdp);
+                            setCamError(false);
+                            setStatus('Handshake berhasil! Mengirim data...');
+                        } catch (e2) { setStatus('❌ Teks jawaban tidak valid, coba lagi.'); }
+                    }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
                     <div className="space-y-3">
                         <p className="text-sm font-medium text-blue-400">{status}</p>
                         <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
                     </div>
+                    )
                 )}
                 
                 <button onClick={close} className="w-full py-3 rounded-xl font-semibold text-dark-300 bg-dark-700 mt-4">Tutup</button>
@@ -1129,4 +1298,4 @@ function P2PSync({ close }) {
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
-</html> 
+</html>
