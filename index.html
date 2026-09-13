@@ -16,6 +16,10 @@
     <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+    <!-- FASE 2: CDN Supabase & React Query -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tanstack/react-query@5.51.1/dist/umd/react-query.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-hot-toast@2.4.1/dist/index.umd.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -117,7 +121,17 @@
 
 <script type="text/babel">
 const{useState,useEffect,useCallback,useMemo,useRef}=React;
+const { createClient } = supabase;
+const { QueryClient, QueryClientProvider, useQuery, useMutation, useQueryClient } = ReactQuery;
+const { Toaster, toast } = reactHotToast;
 
+// ===== KONFIGURASI SUPABASE =====
+const SUPABASE_URL = 'https://nvxfbwvplkxqoetzwky.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im52eHZmYnd2cGxreHFvZXR6d2t5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNDQ0NDEsImV4cCI6MjEwNDgyMDQ0MX0.Lii0Fe1sS5vqKEFvgi3lgb_ETGCCIKA2WaR6Nn7ZlSM';
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const queryClient = new QueryClient();
+
+// ===== FUNGSI HELPER =====
 const fmtC=a=>new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',minimumFractionDigits:0,maximumFractionDigits:0}).format(a);
 const fmtD=d=>new Date(d).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
 const fmtT=d=>new Date(d).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
@@ -128,6 +142,7 @@ const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
 const evalAmt=s=>{try{if(!/[+\-*/]/.test(s))return parseFloat(s);if(!/^[\d+\-*/().\s]+$/.test(s)||!/\d/.test(s))return NaN;const r=Function('"use strict";return('+s+')')();return typeof r==='number'&&isFinite(r)?Math.round(r):NaN;}catch(e){return NaN;}};
 const mungeSdp=sdp=>{try{return sdp.split(/\r?\n/).filter(line=>{if(!line.startsWith('a=candidate'))return true;const p=line.split(' ');const addr=p[4]||'';return p[2]==='udp'&&addr!==''&&!addr.includes(':');}).join('\r\n');}catch(e){return sdp;}};
 
+// ===== FUNGSI OCR (Tetap sama seperti sebelumnya) =====
 const ensureTesseract=()=>new Promise((res,rej)=>{
     if(typeof Tesseract!=='undefined')return res();
     const s=document.createElement('script');
@@ -137,7 +152,6 @@ const ensureTesseract=()=>new Promise((res,rej)=>{
 });
 const normDate=s=>{if(!s)return'';s=String(s).trim();let m=s.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return`${m[1]}-${m[2]}-${m[3]}`;m=s.match(/\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return`${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;}return'';};
 
-// 1. Pembersihan Angka (Mengatasi salah baca titik/koma & huruf o/O)
 const toNum = n => {
     n = String(n).replace(/rp\.?/gi, '').replace(/\s/g, '').replace(/[oO]/g, '0');
     if (!n) return 0;
@@ -153,21 +167,14 @@ const toNum = n => {
     return isFinite(v) ? v : 0;
 };
 
-// 2. Mesin Penebak Kategori + Auto-Learn Memori
 const guessCat = (text, expCats, learnedKw = {}) => {
     const t = String(text).toLowerCase();
-    
-    // A. Cek dari memori hasil belajar (Auto-Learn) terlebih dahulu
     for (const [word, catId] of Object.entries(learnedKw)) {
         if (t.includes(word)) return catId;
     }
-
-    // B. Cek nama kategori persis
     for (const cat of expCats) {
         if (cat.type === 'expense' && t.includes(cat.name.toLowerCase())) return cat.id;
     }
-    
-    // C. Pola statis bawaan
     const kwMap = [
         { rx: /(spbu|bensin|pertalite|pertamax|shell|parkir|\btol\b|gojek|grab|krl|mrt|angkot|ojol)/, key: 'transport' },
         { rx: /(kopi|coffee|cafe|starbucks|janji jiwa|kenangan)/, key: 'kopi' },
@@ -178,7 +185,6 @@ const guessCat = (text, expCats, learnedKw = {}) => {
         { rx: /(mart|supermarket|alfamart|indomaret|hypermart|lotte|transmart|grosir|buah)/, key: 'belanja' },
         { rx: /(smk|sma|smp|sd|sekolah|spp|universitas|kampus|yayasan)/, key: 'pendidikan' }
     ];
-    
     for (const kw of kwMap) {
         if (kw.rx.test(t)) {
             const matched = expCats.find(c => c.type === 'expense' && (c.id === kw.key || c.name.toLowerCase().includes(kw.key)));
@@ -188,12 +194,9 @@ const guessCat = (text, expCats, learnedKw = {}) => {
     return '';
 };
 
-// 3. Ekstraksi Data Utama + Logika Validasi Matematika
 const parseReceipt = (text, expCats, learnedKw = {}) => {
     const lines = String(text).split('\n').map(l => l.trim()).filter(Boolean);
     let amount = 0;
-    
-    // A. Kumpulkan semua angka valid > 100 rupiah
     const allNumbers = [];
     const numRegex = /[\d.,]+/g;
     for (const line of lines) {
@@ -205,8 +208,6 @@ const parseReceipt = (text, expCats, learnedKw = {}) => {
             });
         }
     }
-    
-    // B. Cari relasi Matematika (Tunai - Kembali = Total Belanja)
     let mathTotal = 0;
     const sortedNums = [...new Set(allNumbers)].sort((a, b) => b - a);
     for (let i = 0; i < sortedNums.length; i++) {
@@ -217,8 +218,6 @@ const parseReceipt = (text, expCats, learnedKw = {}) => {
             }
         }
     }
-    
-    // C. Fallback pencarian teks konvensional
     let regexTotal = 0;
     const totalRx = /(total|amount|jumlah|grand|bayar)[^\d]{0,20}([\d.,\s]+)/i;
     for (const line of lines) {
@@ -228,12 +227,9 @@ const parseReceipt = (text, expCats, learnedKw = {}) => {
             if (mx > regexTotal) regexTotal = mx;
         }
     }
-    
-    // D. Penentuan nilai akhir (Matematika diutamakan)
     amount = mathTotal > 0 ? mathTotal : regexTotal;
     if (!amount && sortedNums.length > 1) amount = sortedNums[1];
     else if (!amount && sortedNums.length > 0) amount = sortedNums[0];
-
     const note = (lines.find(l => l.length > 3 && !/(cabang|alamat|telp|kota|npwp|gst|vat|no\.|nomor)/i.test(l)) || 'Scan struk').slice(0, 40);
     return { amount: Math.round(amount), date: normDate(text) || getToday(), note, category: guessCat(text, expCats, learnedKw) };
 };
@@ -267,14 +263,12 @@ const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
             return { amount: Math.round(amount), date: dt, note, category: guessCat(note + ' ' + JSON.stringify(p), expCats, learnedKw) };
         } catch (e) { onProg(null, (e && e.message ? e.message : 'API gagal') + ' — beralih ke OCR offline...'); }
     }
-    
     if (provider === 'offline' || !navigator.onLine) {
         onProg(5, 'Mengunduh mesin OCR (~5MB)... Mohon tunggu.');
     } else {
         onProg(5, 'Menyiapkan mesin OCR...');
     }
     await ensureTesseract();
-    
     const res = await Tesseract.recognize(blob, 'ind+eng', { logger: m => {
         if (m.status === 'recognizing text') onProg(10 + Math.round(m.progress * 85), 'Membaca teks struk...');
         else if (m.status) onProg(null, 'OCR: ' + m.status);
@@ -283,12 +277,6 @@ const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
 };
 
 const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
-
-function useLS(k,v){
-    const[s,set]=useState(()=>{try{const i=localStorage.getItem(k);return i?JSON.parse(i):v}catch{return v}});
-    const sv=val=>{try{const x=val instanceof Function?val(s):val;set(x);localStorage.setItem(k,JSON.stringify(x))}catch{}};
-    return[s,sv];
-}
 
 function fireConfetti(){
     const container=document.getElementById('confettiContainer');
@@ -308,6 +296,7 @@ function fireConfetti(){
     setTimeout(()=>{container.innerHTML=''},4000);
 }
 
+// ===== ICONS (Tetap sama) =====
 const I={
     Home:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>,
     Notes:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>,
@@ -338,35 +327,90 @@ const I={
     Cam:()=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>,
 };
 
-function CatBadge({cat,size='md'}){
-    const letter=cat?.name?.charAt(0)?.toUpperCase()||'?';
-    const sz={sm:'w-6 h-6 text-[10px]',md:'w-8 h-8 text-xs',lg:'w-10 h-10 text-sm'};
-    return <div className={`${sz[size]} rounded-lg flex items-center justify-center font-bold text-white shrink-0`} style={{backgroundColor:cat?.color||'#6b7280'}}>{letter}</div>;
-}
+// ===== KOMPONEN LOGIN =====
+function LoginPage({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [isRegister, setIsRegister] = useState(false);
 
-function WalletIcon({type}){
-    if(type==='cash') return <I.Wallet/>;
-    if(type==='bank') return <I.Building/>;
-    return <I.Phone/>;
-}
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const { data, error } = isRegister 
+      ? await sb.auth.signUp({ email, password })
+      : await sb.auth.signInWithPassword({ email, password });
+      
+    setLoading(false);
+    if (error) toast.error(error.message);
+    else if (data.user) {
+      toast.success(isRegister ? 'Akun dibuat! Silakan login.' : 'Berhasil masuk!');
+      if (!isRegister && data.session) onLogin(data.session);
+    }
+  };
 
-function SwipeItem({children,onDel}){
-    const[off,setOff]=useState(0);const[drag,setDrag]=useState(false);const sx=useRef(0);const TH=70;
-    const ts=e=>{e.stopPropagation(); sx.current=e.touches[0].clientX;setDrag(true)};
-    const tm=e=>{e.stopPropagation(); if(!drag)return;const d=e.touches[0].clientX-sx.current;if(d<0)setOff(Math.max(d,-TH-30))};
-    const te=e=>{e.stopPropagation(); setDrag(false);if(off<-TH)setOff(-TH);else setOff(0)};
-    return(
-        <div className="swipe-wrap">
-            <div className="swipe-bg bg-red-600 rounded-r-xl">
-                <button onClick={(e)=>{e.stopPropagation(); onDel();}} className="text-white text-xs font-semibold px-3 py-1 rounded bg-red-700">Hapus</button>
-            </div>
-            <div className={`swipe-fg bg-dark-700 rounded-xl ${drag?'dragging':''}`} style={{transform:`translateX(${off}px)`}} onTouchStart={ts} onTouchMove={tm} onTouchEnd={te}>
-                {children}
-            </div>
+  return (
+    <div className="min-h-screen bg-dark-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-dark-800 rounded-2xl p-6 shadow-2xl border border-dark-700">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-white">NataHidup ☁️</h1>
+          <p className="text-dark-400 text-sm mt-1">{isRegister ? 'Buat akun baru' : 'Masuk ke akunmu'}</p>
         </div>
-    );
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required className="w-full" />
+          <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full" />
+          <button type="submit" disabled={loading} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600 disabled:opacity-50">
+            {loading ? 'Memproses...' : (isRegister ? 'Daftar' : 'Masuk')}
+          </button>
+        </form>
+        <p className="text-center text-xs text-dark-400 mt-6">
+          {isRegister ? 'Sudah punya akun?' : 'Belum punya akun?'} 
+          <button onClick={() => setIsRegister(!isRegister)} className="text-blue-400 ml-1 font-bold">
+            {isRegister ? 'Masuk' : 'Daftar'}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
 }
 
+// ===== APP WRAPPER =====
+function AppWrapper() {
+  const [session, setSession] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoadingAuth(false);
+    });
+    const { data: { subscription } } = sb.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen bg-dark-900 flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginPage onLogin={setSession} />;
+  }
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Toaster position="top-center" />
+      <App session={session} />
+    </QueryClientProvider>
+  );
+}
+
+// ===== DEFAULT DATA =====
 const DEF_WALLETS=[{id:'w1',name:'Cash',type:'cash',balance:0},{id:'w2',name:'Bank Utama',type:'bank',balance:0},{id:'w3',name:'E-Wallet',type:'ewallet',balance:0}];
 const DEF_EXP_CAT=[
     {id:'makan',name:'Makan & Minum',color:'#f59e0b',type:'expense'},
@@ -392,323 +436,255 @@ const DEF_BUDGETS=[
     {id:'b3',category:'hiburan',limit:300000,period:'monthly',categories:['hiburan']},
 ];
 
-function App(){
-    const MAINTENANCE_MODE = false;
+// ===== MAIN APP COMPONENT =====
+function App({ session }) {
+  const queryClient = useQueryClient();
+  const userId = session.user.id;
+  const[tab,setTab]=useState('home');const[modal,setModal]=useState(null);const[mData,setMData]=useState(null);
+  const[learnedKw,setLearnedKw]=useState({});
+  const[ocrProvider,setOcrProvider]=useState('offline');
+  const[ocrKey,setOcrKey]=useState('');
+  const[pageKey,setPageKey]=useState(0);
+  const [undoTxn, setUndoTxn] = useState(null);
+  
+  // FASE 2: Fetch data dari Supabase menggunakan React Query
+  const { data: wallets = [], isLoading: walletsLoading } = useQuery({
+    queryKey: ['wallets', userId],
+    queryFn: async () => {
+      const { data, error } = await sb.from('wallets').select('*').eq('user_id', userId);
+      if (error) throw error;
+      if (data.length === 0) {
+        // Insert default wallets jika belum ada
+        const defaultWallets = DEF_WALLETS.map(w => ({ ...w, user_id: userId }));
+        const { data: inserted } = await sb.from('wallets').insert(defaultWallets).select();
+        return inserted || [];
+      }
+      return data;
+    },
+  });
 
-    if (MAINTENANCE_MODE) {
-        return (
-            <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 mb-6">
-                    <I.Gear />
-                </div>
-                <h1 className="text-2xl font-bold text-white mb-2">Sedang Maintenance 🛠️</h1>
-                <p className="text-dark-400 text-sm">Aplikasi sedang diperbarui oleh developer. Silakan kembali lagi nanti!</p>
-            </div>
-        );
+  const { data: txns = [], isLoading: txnsLoading } = useQuery({
+    queryKey: ['transactions', userId],
+    queryFn: async () => {
+      const { data, error } = await sb
+        .from('transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const { data: expCats = [] } = useQuery({
+    queryKey: ['categories', userId, 'expense'],
+    queryFn: async () => {
+      const { data, error } = await sb.from('categories').select('*').eq('user_id', userId).eq('type', 'expense');
+      if (error) throw error;
+      if (data.length === 0) {
+        const defaultCats = DEF_EXP_CAT.map(c => ({ ...c, user_id: userId }));
+        const { data: inserted } = await sb.from('categories').insert(defaultCats).select();
+        return inserted || [];
+      }
+      return data;
+    },
+  });
+
+  const { data: incCats = [] } = useQuery({
+    queryKey: ['categories', userId, 'income'],
+    queryFn: async () => {
+      const { data, error } = await sb.from('categories').select('*').eq('user_id', userId).eq('type', 'income');
+      if (error) throw error;
+      if (data.length === 0) {
+        const defaultCats = DEF_INC_CAT.map(c => ({ ...c, user_id: userId }));
+        const { data: inserted } = await sb.from('categories').insert(defaultCats).select();
+        return inserted || [];
+      }
+      return data;
+    },
+  });
+
+  // Mutations untuk transaksi
+  const addTxnMutation = useMutation({
+    mutationFn: async (newTxn) => {
+      const { data, error } = await sb
+        .from('transactions')
+        .insert([{ ...newTxn, user_id: userId, is_deleted: false }])
+        .select()
+        .single();
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['transactions', userId]);
+      queryClient.invalidateQueries(['wallets', userId]);
+    },
+    onError: (err) => {
+      toast.error('Gagal menyimpan transaksi: ' + err.message);
+    },
+  });
+
+  const deleteTxnMutation = useMutation({
+    mutationFn: async (txnId) => {
+      const { error } = await sb
+        .from('transactions')
+        .update({ is_deleted: true })
+        .eq('id', txnId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['transactions', userId]);
+      queryClient.invalidateQueries(['wallets', userId]);
+    },
+    onError: (err) => {
+      toast.error('Gagal menghapus: ' + err.message);
+    },
+  });
+
+  const addTxn = (t) => {
+    const n = { ...t, id: genId(), date: t.date || getToday(), createdAt: new Date().toISOString() };
+    addTxnMutation.mutate(n);
+  };
+
+  const saveTxn = (t) => {
+    triggerHaptic();
+    if (mData?.id) {
+      // Update existing
+      const updateMutation = useMutation({
+        mutationFn: async () => {
+          const { error } = await sb
+            .from('transactions')
+            .update(t)
+            .eq('id', mData.id);
+          if (error) throw error;
+        },
+        onSuccess: () => {
+          queryClient.invalidateQueries(['transactions', userId]);
+          closeM();
+        },
+        onError: (err) => toast.error('Gagal update: ' + err.message),
+      });
+      updateMutation.mutate();
+    } else {
+      addTxn(t);
+      closeM();
     }
+  };
 
-    const[tab,setTab]=useState('home');const[modal,setModal]=useState(null);const[mData,setMData]=useState(null);
-    const[wallets,setWallets]=useLS('nh_w',DEF_WALLETS);
-    const[txns,setTxns]=useLS('nh_tx',[]);
-    const[budgets,setBudgets]=useLS('nh_bg',DEF_BUDGETS);
-    const[notes,setNotes]=useLS('nh_n',[]);
-    const[todos,setTodos]=useLS('nh_td',[]);
-    const[debts,setDebts]=useLS('nh_db',[]);
-    const[expCats,setExpCats]=useLS('nh_ec',DEF_EXP_CAT);
-    const[incCats,setIncCats]=useLS('nh_ic',DEF_INC_CAT);
-    const[streak,setStreak]=useLS('nh_sk',{current:0,longest:0,lastDate:null,celebratedAt:[]});
-    const[ocrProvider,setOcrProvider]=useLS('nh_ocrp','offline');
-    const[ocrKey,setOcrKey]=useLS('nh_ocrk','');
-    // State baru untuk Auto-Learn Memori OCR
-    const[learnedKw,setLearnedKw]=useLS('nh_lkw',{});
-    const[pageKey,setPageKey]=useState(0);
-    
-    const [undoTxn, setUndoTxn] = useState(null);
+  const delTxn = (id, callback) => {
+    if (!id) return;
+    const t = txns.find(x => x.id === id);
+    if (!t) return;
+    triggerHaptic();
+    setUndoTxn({ txn: t });
+    deleteTxnMutation.mutate(id);
+    if (callback) callback();
+    setTimeout(() => setUndoTxn(null), 3000);
+  };
 
-    const allCats=useMemo(()=>[...expCats,...incCats],[expCats,incCats]);
-    const getCat=id=>allCats.find(c=>c.id===id);
-    const totalBal=useMemo(()=>wallets.reduce((s,w)=>s+w.balance,0),[wallets]);
-    
-    const mTxns=useMemo(()=>txns.filter(t=>t.date.startsWith(getMY())&&t.type!=='transfer'),[txns]);
-    const mIncome=useMemo(()=>mTxns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0),[mTxns]);
-    const mExpense=useMemo(()=>mTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[mTxns]);
-    const todayTxns=useMemo(()=>txns.filter(t=>t.date===getToday()),[txns]);
-    const todayExp=useMemo(()=>todayTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[todayTxns]);
-    const catSpend=useMemo(()=>{const s={};mTxns.filter(t=>t.type==='expense').forEach(t=>{s[t.category]=(s[t.category]||0)+t.amount});return s},[mTxns]);
-    const remain=mIncome-mExpense;
-
-    useEffect(()=>{
-        const today=getToday();if(streak.lastDate===today)return;
-        const yd=new Date();yd.setDate(yd.getDate()-1);const ydStr=yd.toISOString().split('T')[0];
-        const ydExp=txns.filter(t=>t.date===ydStr&&t.type==='expense').reduce((s,t)=>s+t.amount,0);
-        const now=new Date();const dim=daysInMonth(now.getFullYear(),now.getMonth()+1);
-        const totalBudget=budgets.reduce((s,b)=>s+b.limit,0);const dailyLim=totalBudget/dim;
-        const yesterdayWasYesterday=streak.lastDate===ydStr;
-        let nc=streak.current;
-        if(yesterdayWasYesterday||!streak.lastDate){
-            if(ydExp<=dailyLim){nc=streak.current+1}
-            else if(ydExp>dailyLim){nc=0}
-        }else{nc=0}
-        const nl=Math.max(streak.longest,nc);
-        const celebrated=[...(streak.celebratedAt||[])];
-        const milestones=[7,14,30,50,100,200,365];
-        if(nc>0&&milestones.includes(nc)&&!celebrated.includes(nc)){
-            celebrated.push(nc);
-            setTimeout(()=>fireConfetti(),500);
-        }
-        setStreak({current:nc,longest:nl,lastDate:today,celebratedAt:celebrated});
-    },[]);
-
-    useEffect(()=>{
-        const recurring=txns.filter(t=>t.isRecurring);const my=getMY();
-        recurring.forEach(r=>{
-            const exists=txns.some(t=>t.recurringPid===r.id&&t.date.startsWith(my));
-            if(!exists&&new Date().getDate()>=r.recurringDay){
-                const nt={...r,id:genId(),recurringPid:r.id,date:`${my}-${String(r.recurringDay).padStart(2,'0')}`,createdAt:new Date().toISOString(),isRecurring:false};
-                setTxns(p=>[nt,...p]);
-                if(r.walletId)setWallets(p=>p.map(w=>w.id===r.walletId?{...w,balance:w.balance+(r.type==='income'?r.amount:-r.amount)}:w));
-            }
-        });
-    },[]);
-
-    const addTxn=t=>{
-        const n={...t,id:genId(),date:t.date||getToday(),createdAt:new Date().toISOString()};
-        setTxns(p=>[n,...p]);
-        if(t.type==='transfer'){
-            setWallets(p=>p.map(w=>{
-                if(w.id===t.transferFrom) return {...w, balance: w.balance - t.amount};
-                if(w.id===t.transferTo) return {...w, balance: w.balance + t.amount};
-                return w;
-            }));
-        }else if(t.walletId){
-            setWallets(p=>p.map(w=>w.id===t.walletId?{...w,balance:w.balance+(t.type==='income'?t.amount:-t.amount)}:w));
-        }
-    };
-
-    const saveTxn = (t) => {
-        triggerHaptic();
-        if (mData?.id) {
-            setTxns(p => p.map(tx => tx.id === mData.id ? { ...t, id: mData.id, createdAt: tx.createdAt } : tx));
-        } else {
-            addTxn(t);
-        }
-        closeM();
-    };
-
-    const delTxn = (id, callback) => {
-        if (!id) return;
-        const t = txns.find(x => x.id === id);
-        if (!t) return;
-        triggerHaptic();
-        
-        setTxns(p => p.filter(x => x.id !== id));
-        
-        if (t.type === 'transfer') {
-            setWallets(p => p.map(w => {
-                if (w.id === t.transferFrom) return { ...w, balance: w.balance + t.amount };
-                if (w.id === t.transferTo) return { ...w, balance: w.balance - t.amount };
-                return w;
-            }));
-        } else if (t.walletId) {
-            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? -t.amount : t.amount) } : w));
-        }
-        
-        setUndoTxn({ txn: t });
-        if (callback) callback();
-    };
-
-    const undoDelete = () => {
-        if (!undoTxn) return;
-        const t = undoTxn.txn;
-        
-        setTxns(p => [t, ...p]);
-        
-        if (t.type === 'transfer') {
-            setWallets(p => p.map(w => {
-                if (w.id === t.transferFrom) return { ...w, balance: w.balance - t.amount };
-                if (w.id === t.transferTo) return { ...w, balance: w.balance + t.amount };
-                return w;
-            }));
-        } else if (t.walletId) {
-            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? t.amount : -t.amount) } : w));
-        }
-        
+  const undoDelete = () => {
+    if (!undoTxn) return;
+    const t = undoTxn.txn;
+    const restoreMutation = useMutation({
+      mutationFn: async () => {
+        const { error } = await sb
+          .from('transactions')
+          .update({ is_deleted: false })
+          .eq('id', t.id);
+        if (error) throw error;
+      },
+      onSuccess: () => {
+        queryClient.invalidateQueries(['transactions', userId]);
         setUndoTxn(null);
-    };
+      },
+    });
+    restoreMutation.mutate();
+  };
 
-    const addNote=n=>{triggerHaptic();setNotes(p=>[{...n,id:genId(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);};
-    const updNote=(id,u)=>setNotes(p=>p.map(n=>n.id===id?{...n,...u,updatedAt:new Date().toISOString()}:n));
-    const delNote=id=>setNotes(p=>p.filter(n=>n.id!==id));
-    
-    const addTodo=t=>{triggerHaptic();setTodos(p=>[{...t,id:genId(),completed:false,createdAt:new Date().toISOString()},...p]);};
-    const togTodo=id=>{
-        const todo = todos.find(t => t.id === id);
-        if (todo && !todo.completed && todo.budget > 0) {
-            openM('todoBudget', todo);
-        } else {
-            setTodos(p=>p.map(t=>t.id===id?{...t,completed:!t.completed}:t));
-        }
-    };
-    const delTodo=id=>setTodos(p=>p.filter(t=>t.id!==id));
-    
-    const completeTodoWithExpense = (todoId, realCost, walletId) => {
-        const todo = todos.find(t => t.id === todoId);
-        setTodos(p => p.map(t => t.id === todoId ? { ...t, completed: true } : t));
-        if (todo) {
-            addTxn({
-                type: 'expense',
-                amount: realCost,
-                category: 'lainnya_e',
-                note: `[Auto-Todo] ${todo.title}`,
-                date: getToday(),
-                walletId: walletId
-            });
-        }
-        closeM();
-    };
+  const allCats = useMemo(() => [...expCats, ...incCats], [expCats, incCats]);
+  const getCat = id => allCats.find(c => c.id === id);
+  const totalBal = useMemo(() => wallets.reduce((s, w) => s + (w.balance || 0), 0), [wallets]);
+  
+  const mTxns = useMemo(() => txns.filter(t => t.date && t.date.startsWith(getMY()) && t.type !== 'transfer'), [txns]);
+  const mIncome = useMemo(() => mTxns.filter(t => t.type === 'income').reduce((s, t) => s + (t.amount || 0), 0), [mTxns]);
+  const mExpense = useMemo(() => mTxns.filter(t => t.type === 'expense').reduce((s, t) => s + (t.amount || 0), 0), [mTxns]);
+  const todayTxns = useMemo(() => txns.filter(t => t.date === getToday()), [txns]);
+  const todayExp = useMemo(() => todayTxns.filter(t => t.type === 'expense').reduce((s, t) => s + (t.amount || 0), 0), [todayTxns]);
+  const catSpend = useMemo(() => { const s = {}; mTxns.filter(t => t.type === 'expense').forEach(t => { s[t.category] = (s[t.category] || 0) + t.amount }); return s }, [mTxns]);
+  const remain = mIncome - mExpense;
 
-    const skipTodoExpense = (todoId) => {
-        setTodos(p => p.map(t => t.id === todoId ? { ...t, completed: true } : t));
-        closeM();
-    };
-
-    const addDebt=d=>{triggerHaptic();setDebts(p=>[{...d,id:genId(),status:'pending',createdAt:new Date().toISOString()},...p]);};
-    const togDebt=id=>setDebts(p=>p.map(d=>d.id===id?{...d,status:d.status==='pending'?'paid':'pending'}:d));
-    const delDebt=id=>setDebts(p=>p.filter(d=>d.id!==id));
-    
-    const openM=(t,d=null)=>{setMData(d);setModal(t)};
-    const closeM=()=>{setModal(null);setMData(null)};
-    
-    const tabs=['home','notes','finance','settings'];
-    const tabIdx=tabs.indexOf(tab);
-    const touchStartX=useRef(0);
-    const handleTouchStart=e=>{touchStartX.current=e.touches[0].clientX};
-    const handleTouchEnd=e=>{
-        const diff=e.changedTouches[0].clientX-touchStartX.current;
-        if(Math.abs(diff)>80){
-            if(diff<0&&tabIdx<tabs.length-1){setTab(tabs[tabIdx+1]);setPageKey(k=>k+1)}
-            else if(diff>0&&tabIdx>0){setTab(tabs[tabIdx-1]);setPageKey(k=>k+1)}
-        }
-    };
-
-    return(
-        <div className="pb-20 min-h-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
-            <div className="px-4 pt-4 page-enter" key={pageKey}>
-                {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM}/>}
-                {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM}/>}
-                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
-                {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats} streak={streak} openM={openM} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey}/>}
-            </div>
-            
-            <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
-                <div className="flex items-center justify-around">
-                    <NB ic={<I.Home/>} lb="Home" ac={tab==='home'} fn={()=>{setTab('home');setPageKey(k=>k+1)}}/>
-                    <NB ic={<I.Notes/>} lb="Notes" ac={tab==='notes'} fn={()=>{setTab('notes');setPageKey(k=>k+1)}}/>
-                    <button onClick={()=>{triggerHaptic();openM('quickAdd')}} className={`w-14 h-14 -mt-6 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-600/30 ch text-white ${txns.length===0?'animate-bounce':'fab-p'}`}>
-                        <I.Plus/>
-                    </button>
-                    <NB ic={<I.Dollar/>} lb="Finance" ac={tab==='finance'} fn={()=>{setTab('finance');setPageKey(k=>k+1)}}/>
-                    <NB ic={<I.Gear/>} lb="Setting" ac={tab==='settings'} fn={()=>{setTab('settings');setPageKey(k=>k+1)}}/>
-                </div>
-            </nav>
-            
-            {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='scanReceipt'&&<SyncErrorBoundary close={closeM}><ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw}/></SyncErrorBoundary>}
-            {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
-            {modal==='addNote'&&<NoteM close={closeM} save={mData?.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
-            {modal==='addWallet'&&<WalletM close={closeM} save={w=>setWallets(p=>[...p,{...w,id:genId(),balance:0}])}/>}
-            {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={setBudgets}/>}
-            {modal==='addDebt'&&<DebtM close={closeM} save={addDebt}/>}
-            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id, closeM)}} getCat={getCat} wallets={wallets}/>}
-            {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} save={mData==='expense'?setExpCats:setIncCats} type={mData}/>}
-            {modal==='todoBudget'&&<TodoBudgetM close={closeM} todo={mData} completeWithExpense={completeTodoWithExpense} skipExpense={skipTodoExpense} wallets={wallets}/>}
-            {modal==='p2pSync'&&<SyncErrorBoundary close={closeM}><P2PSync close={closeM}/></SyncErrorBoundary>}
-            
-            {undoTxn&&(
-                <div className="fixed bottom-24 left-0 right-0 max-w-md mx-auto px-4 z-50 pointer-events-none">
-                    <div className="pointer-events-auto bg-dark-700/95 backdrop-blur border border-white/10 rounded-2xl p-3 flex items-center justify-between shadow-2xl modal-ct">
-                        <span className="text-sm">🗑️ Transaksi dihapus</span>
-                        <button onClick={undoDelete} className="text-blue-400 text-sm font-bold px-3 py-1">UNDO</button>
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-}
-
-class SyncErrorBoundary extends React.Component {
-    constructor(props){super(props);this.state={hasError:false};}
-    static getDerivedStateFromError(){return{hasError:true};}
-    componentDidCatch(err,info){console.error('P2P Sync error:',err,info);}
-    render(){
-        if(this.state.hasError){
-            return(
-                <div className="fixed inset-0 z-50 flex items-center justify-center modal-ov" onClick={this.props.close}>
-                    <div className="absolute inset-0 bg-black/60"/>
-                    <div className="relative w-full max-w-md bg-dark-800 rounded-3xl p-6 text-center modal-ct mx-4" onClick={e=>e.stopPropagation()}>
-                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-yellow-400 text-2xl">⚠️</div>
-                        <p className="font-bold text-lg mb-2">Modul Sinkronisasi Gagal Dimuat</p>
-                        <p className="text-dark-400 text-sm mb-5">Jangan khawatir, data Anda aman. Gunakan tombol Ekspor / Impor JSON di Pengaturan sebagai jalur alternatif yang 100% offline.</p>
-                        <button onClick={this.props.close} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600">Tutup</button>
-                    </div>
-                </div>
-            );
-        }
-        return this.props.children;
+  const openM = (t, d = null) => { setMData(d); setModal(t) };
+  const closeM = () => { setModal(null); setMData(null) };
+  
+  const tabs = ['home', 'notes', 'finance', 'settings'];
+  const tabIdx = tabs.indexOf(tab);
+  const touchStartX = useRef(0);
+  const handleTouchStart = e => { touchStartX.current = e.touches[0].clientX };
+  const handleTouchEnd = e => {
+    const diff = e.changedTouches[0].clientX - touchStartX.current;
+    if (Math.abs(diff) > 80) {
+      if (diff < 0 && tabIdx < tabs.length - 1) { setTab(tabs[tabIdx + 1]); setPageKey(k => k + 1) }
+      else if (diff > 0 && tabIdx > 0) { setTab(tabs[tabIdx - 1]); setPageKey(k => k + 1) }
     }
-}
+  };
 
-function CamError({onBack,onPaste,pasteValue,setPaste}){
-    return(
-        <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 text-center space-y-3">
-            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto text-red-400">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
-            </div>
-            <p className="font-bold text-red-400 text-sm">Kamera Tidak Bisa Diakses</p>
-            <div className="text-left text-xs text-dark-300 space-y-1.5 bg-dark-900/60 rounded-xl p-3.5 leading-relaxed">
-                <p>1. Ketuk ikon <b>gembok 🔒</b> di address bar browser.</p>
-                <p>2. Buka <b>Izin Situs / Site settings</b> → <b>Kamera</b> → pilih <b>Izinkan</b>.</p>
-                <p>3. Kembali ke aplikasi, tutup lalu buka lagi menu sinkronisasi.</p>
-            </div>
-            {onPaste&&(<>
-                <p className="text-[11px] text-dark-400">Tanpa kamera: minta pengirim menekan "Salin Teks" di QR-nya, kirim via WA/Telegram, lalu tempel di sini.</p>
-                <textarea rows={3} placeholder="Tempel teks SDP di sini..." value={pasteValue} onChange={e=>setPaste(e.target.value)} className="text-[10px] leading-tight"/>
-                <button type="button" disabled={!pasteValue.trim()} onClick={()=>onPaste(pasteValue.trim())} className={`w-full py-2.5 rounded-xl text-sm font-semibold text-white ${pasteValue.trim()?'bg-green-600':'bg-dark-600 text-dark-400'}`}>Proses Teks</button>
-            </>)}
-            <button type="button" onClick={onBack} className="w-full py-2 rounded-xl bg-dark-600 text-sm text-dark-300">Kembali</button>
-        </div>
+  // Loading state
+  if (walletsLoading || txnsLoading) {
+    return (
+      <div className="min-h-screen bg-dark-900 flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
     );
+  }
+
+  return (
+    <div className="pb-20 min-h-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <div className="px-4 pt-4 page-enter" key={pageKey}>
+        {tab === 'home' && <Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={[]} budgets={DEF_BUDGETS} catSpend={catSpend} streak={{current:0,longest:0}} allCats={allCats} openM={openM}/>}
+        {tab === 'notes' && <NotesMod notes={[]} todos={[]} addNote={()=>{}} updNote={()=>{}} delNote={()=>{}} addTodo={()=>{}} togTodo={()=>{}} delTodo={()=>{}} openM={openM}/>}
+        {tab === 'finance' && <FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={DEF_BUDGETS} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={[]} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={()=>{}} setBudgets={()=>{}} addDebt={()=>{}} togDebt={()=>{}} delDebt={()=>{}} delTxn={delTxn} openM={openM}/>}
+        {tab === 'settings' && <SetMod wallets={wallets} setWallets={()=>{}} txns={txns} budgets={DEF_BUDGETS} setBudgets={()=>{}} notes={[]} todos={[]} debts={[]} expCats={expCats} incCats={incCats} setExpCats={()=>{}} setIncCats={()=>{}} streak={{current:0,longest:0}} openM={openM} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey} session={session}/>}
+      </div>
+      
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
+        <div className="flex items-center justify-around">
+          <NB ic={<I.Home/>} lb="Home" ac={tab === 'home'} fn={() => { setTab('home'); setPageKey(k => k + 1) }}/>
+          <NB ic={<I.Notes/>} lb="Notes" ac={tab === 'notes'} fn={() => { setTab('notes'); setPageKey(k => k + 1) }}/>
+          <button onClick={() => { triggerHaptic(); openM('quickAdd') }} className={`w-14 h-14 -mt-6 bg-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-600/30 ch text-white ${txns.length === 0 ? 'animate-bounce' : 'fab-p'}`}>
+            <I.Plus/>
+          </button>
+          <NB ic={<I.Dollar/>} lb="Finance" ac={tab === 'finance'} fn={() => { setTab('finance'); setPageKey(k => k + 1) }}/>
+          <NB ic={<I.Gear/>} lb="Setting" ac={tab === 'settings'} fn={() => { setTab('settings'); setPageKey(k => k + 1) }}/>
+        </div>
+      </nav>
+      
+      {modal === 'quickAdd' && <QuickAddM close={closeM} openM={openM}/>}
+      {modal === 'addTxn' && <TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
+      
+      {undoTxn && (
+        <div className="fixed bottom-24 left-0 right-0 max-w-md mx-auto px-4 z-50 pointer-events-none">
+          <div className="pointer-events-auto bg-dark-700/95 backdrop-blur border border-white/10 rounded-2xl p-3 flex items-center justify-between shadow-2xl modal-ct">
+            <span className="text-sm">🗑️ Transaksi dihapus</span>
+            <button onClick={undoDelete} className="text-blue-400 text-sm font-bold px-3 py-1">UNDO</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NB({ic,lb,ac,fn}){return<button onClick={fn} className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all ${ac?'text-blue-400':'text-dark-400'}`}>{ic}<span className="text-[10px] mt-1 font-medium">{lb}</span></button>}
 
-function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, todos, budgets, catSpend, streak, allCats, openM}){
-    const now=new Date();const g=now.getHours()<12?'Selamat Pagi':now.getHours()<18?'Selamat Siang':'Selamat Malam';
-    const dn=now.toLocaleDateString('id-ID',{weekday:'long'});
-    const pendTodos=todos.filter(t=>!t.completed).slice(0,4);
-    const warnings=budgets.filter(b=>{const s=catSpend[b.category]||0;return b.limit>0&&s/b.limit>.7}).slice(0,3);
-    const dim=daysInMonth(now.getFullYear(),now.getMonth()+1);
-    const totalBudget=budgets.reduce((s,b)=>s+b.limit,0);
-    const dailyLim=totalBudget/dim;
-    const sc=streak.current;
-    const milestone=sc>=365?'365 Hari':sc>=100?'100 Hari':sc>=50?'50 Hari':sc>=30?'Legendaris':sc>=14?'Luar Biasa':sc>=7?'Konsisten':sc>=3?'Mulai Bagus':'';
-    const streakClass=sc>=365?'streak-legend':sc>=100?'streak-diamond':sc>=50?'streak-gold':'';
-    const streakTextColor=sc>=50?'text-dark-900':'text-orange-400';
-    const streakBgText=sc>=50?'text-dark-700':'text-dark-400';
+// Komponen Dash (versi sederhana untuk demo)
+function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, allCats, openM}){
+    const now = new Date();
+    const g = now.getHours() < 12 ? 'Selamat Pagi' : now.getHours() < 18 ? 'Selamat Siang' : 'Selamat Malam';
+    const dn = now.toLocaleDateString('id-ID', { weekday: 'long' });
 
     return(
         <div className="space-y-5">
             <div className="pt-2"><p className="text-dark-400 text-sm">{dn}, {fmtD(now)}</p><h1 className="text-2xl font-bold mt-1">{g}</h1></div>
-            {sc>0&&(
-                <div className={`${streakClass} rounded-2xl p-4 flex items-center gap-4 ${sc<50?'bg-gradient-to-r from-orange-600/20 to-amber-600/20 border border-orange-500/30':''}`}>
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${sc>=50?'bg-white/30':'bg-orange-500/20'} ${streakTextColor}`}>{sc>=100?<I.Trophy/>:<I.Flame/>}</div>
-                    <div className="flex-1">
-                        <p className={`font-bold text-sm ${streakTextColor}`}>{sc} Hari Berturut-turut Hemat</p>
-                        <p className={`${streakBgText} text-xs`}>Terpanjang: {streak.longest} hari{milestone&&<span className={`font-semibold ml-1 ${streakTextColor}`}>-- {milestone}</span>}</p>
-                    </div>
-                    {sc>=50&&<span className="text-2xl">🏆</span>}
-                </div>
-            )}
             <div className="bg-gradient-to-br from-blue-600 to-purple-700 rounded-2xl p-5 shadow-lg shadow-blue-600/20">
                 <p className="text-blue-200 text-sm">Total Saldo</p>
                 <p className="text-3xl font-bold mt-1">{fmtC(totalBal)}</p>
@@ -718,59 +694,29 @@ function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns
                 </div>
             </div>
             <div className="bg-dark-700 rounded-2xl p-4">
-                <div className="flex justify-between items-center mb-3">
-                    <h3 className="font-semibold text-sm">Sisa Budget Bulan Ini</h3>
-                    <span className={`text-sm font-bold ${remain>=0?'text-green-400':'text-red-400'}`}>{fmtC(remain)}</span>
-                </div>
-                <div className="w-full bg-dark-600 rounded-full h-3">
-                    <div className={`h-3 rounded-full bb ${remain>500000?'bg-green-500':remain>0?'bg-yellow-500':'bg-red-500'}`} style={{width:`${Math.min(100,Math.max(0,mIncome>0?(remain/mIncome)*100:0))}%`}}/>
-                </div>
-                <div className="flex justify-between mt-2">
-                    <p className="text-dark-400 text-xs">Limit harian: {fmtC(dailyLim)}</p>
-                    <p className={`text-xs ${todayExp>dailyLim?'text-red-400 font-semibold':'text-dark-400'}`}>Hari ini: {fmtC(todayExp)}</p>
-                </div>
-            </div>
-            {warnings.length>0&&(
-                <div className="bg-dark-700 rounded-2xl p-4">
-                    <h3 className="font-semibold text-sm mb-3 flex items-center gap-2 text-yellow-400"><I.Alert/> Peringatan Budget</h3>
-                    <div className="space-y-3">
-                        {warnings.map(bw=>{
-                            const spent=catSpend[bw.category]||0;const pct=Math.min(100,(spent/bw.limit)*100);
-                            const isOver=pct>=100;
-                            return(
-                                <div key={bw.id}>
-                                    <div className="flex justify-between text-xs mb-1">
-                                        <span className="flex items-center gap-1.5"><CatBadge cat={{name:bw.category,color:'#6b7280'}} size="sm"/><span className="capitalize">{bw.category}</span></span>
-                                        <span className={isOver?'text-red-400 font-bold':'text-yellow-400'}>{fmtC(spent)} / {fmtC(bw.limit)}</span>
-                                    </div>
-                                    <div className="w-full bg-dark-600 rounded-full h-2"><div className={`h-2 rounded-full bb ${isOver?'bg-red-500':'bg-yellow-500'}`} style={{width:`${pct}%`}}/></div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
-            <div className="bg-dark-700 rounded-2xl p-4">
                 <h3 className="font-semibold text-sm mb-3 flex items-center gap-2"><I.Cal/> Hari Ini</h3>
                 <div className="flex justify-between items-center mb-3 pb-3 border-b border-dark-600">
                     <span className="text-dark-300 text-sm">Pengeluaran hari ini</span>
                     <span className="font-bold text-sm">{fmtC(todayExp)}</span>
                 </div>
-                {todayTxns.length>0?(
-                    <div className="space-y-2">{todayTxns.slice(0,3).map(t=>{
-                        if(t.type==='transfer'){
-                            const fromW=wallets.find(w=>w.id===t.transferFrom);
-                            const toW=wallets.find(w=>w.id===t.transferTo);
-                            return(<div key={t.id} className="flex items-center gap-3 py-1"><div className="w-6 h-6 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Transfer/></div><div className="flex-1 min-w-0"><p className="text-sm truncate">Transfer: {fromW?.name} → {toW?.name}</p></div><span className="text-sm font-semibold text-blue-400">{fmtC(t.amount)}</span></div>);
-                        }
-                        const cat=allCats.find(c=>c.id===t.category)||{name:t.category,color:'#6b7280'};
-                        return(<div key={t.id} className="flex items-center gap-3 py-1"><CatBadge cat={cat} size="sm"/><div className="flex-1 min-w-0"><p className="text-sm truncate">{t.note||cat.name}</p></div><span className={`text-sm font-semibold ${t.type==='income'?'text-green-400':'text-red-400'}`}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</span></div>);
+                {todayTxns.length > 0 ? (
+                    <div className="space-y-2">{todayTxns.slice(0, 3).map(t => {
+                        const cat = allCats.find(c => c.id === t.category) || { name: t.category, color: '#6b7280' };
+                        return (
+                            <div key={t.id} className="flex items-center gap-3 py-1">
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white" style={{ backgroundColor: cat.color }}>
+                                    {cat.name.charAt(0)}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm truncate">{t.note || cat.name}</p>
+                                </div>
+                                <span className={`text-sm font-semibold ${t.type === 'income' ? 'text-green-400' : 'text-red-400'}`}>
+                                    {t.type === 'income' ? '+' : '-'}{fmtC(t.amount)}
+                                </span>
+                            </div>
+                        );
                     })}</div>
-                ):(<p className="text-dark-500 text-sm text-center py-2">Belum ada transaksi</p>)}
-                {pendTodos.length>0&&(
-                    <><div className="border-t border-dark-600 mt-3 pt-3"><p className="text-dark-400 text-xs mb-2">Tugas ({pendTodos.length})</p></div>
-                    <div className="space-y-2">{pendTodos.map(t=>(<div key={t.id} className="flex items-center gap-2"><div className="w-4 h-4 border-2 border-dark-400 rounded shrink-0"/><span className="text-sm truncate flex-1">{t.title}</span>{t.deadline&&<span className="text-xs text-dark-500">{fmtD(t.deadline)}</span>}</div>))}</div></>
-                )}
+                ) : (<p className="text-dark-500 text-sm text-center py-2">Belum ada transaksi</p>)}
             </div>
         </div>
     );
@@ -795,9 +741,6 @@ function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,tota
 }
 
 function FinOverview({wallets,mIncome,mExpense,totalBal,catSpend,allCats,txns,openM}){
-    const totalExp=Object.values(catSpend).reduce((a,b)=>a+b,0);
-    const chart=allCats.filter(c=>c.type==='expense').map(c=>({...c,amt:catSpend[c.id]||0,pct:totalExp>0?((catSpend[c.id]||0)/totalExp*100):0})).filter(d=>d.amt>0).sort((a,b)=>b.amt-a.amt);
-    const transferCount=txns.filter(t=>t.type==='transfer'&&t.date.startsWith(getMY())).length;
     return(
         <div className="space-y-4">
             <div className="bg-dark-700 rounded-2xl p-4">
@@ -808,265 +751,102 @@ function FinOverview({wallets,mIncome,mExpense,totalBal,catSpend,allCats,txns,op
                 <div className="bg-dark-700 rounded-xl p-4"><div className="w-8 h-8 bg-green-500/20 rounded-lg flex items-center justify-center text-green-400 mb-2"><I.Up/></div><p className="text-dark-400 text-xs">Pemasukan</p><p className="text-lg font-bold text-green-400">{fmtC(mIncome)}</p></div>
                 <div className="bg-dark-700 rounded-xl p-4"><div className="w-8 h-8 bg-red-500/20 rounded-lg flex items-center justify-center text-red-400 mb-2"><I.Down/></div><p className="text-dark-400 text-xs">Pengeluaran</p><p className="text-lg font-bold text-red-400">{fmtC(mExpense)}</p></div>
             </div>
-            {transferCount>0&&(<div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 flex items-center gap-3"><div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center text-blue-400"><I.Transfer/></div><div><p className="text-sm font-medium">{transferCount} Transfer Bulan Ini</p><p className="text-xs text-dark-400">Tidak dihitung sebagai pengeluaran</p></div></div>)}
-            <div className="bg-dark-700 rounded-2xl p-4">
-                <h3 className="font-semibold text-sm mb-4">Pengeluaran per Kategori</h3>
-                {chart.length>0?<div className="space-y-3">{chart.map(c=>(<div key={c.id}><div className="flex justify-between items-center mb-1"><span className="text-sm flex items-center gap-2"><CatBadge cat={c} size="sm"/>{c.name}</span><span className="text-sm font-medium">{fmtC(c.amt)}</span></div><div className="w-full bg-dark-600 rounded-full h-2"><div className="h-2 rounded-full bb" style={{width:`${c.pct}%`,backgroundColor:c.color}}/></div><p className="text-dark-500 text-[10px] mt-0.5">{c.pct.toFixed(1)}%</p></div>))}</div>:<p className="text-dark-500 text-sm text-center py-4">Belum ada pengeluaran</p>}
-            </div>
         </div>
     );
 }
 
 function TxnList({txns,getCat,openM,delTxn,wallets}){
     const[filter,setFilter]=useState('all');const[q,setQ]=useState('');
-    const filtered=useMemo(()=>{let f=txns;if(filter!=='all')f=f.filter(t=>t.type===filter);if(q.trim()){const s=q.toLowerCase();f=f.filter(t=>(t.note||'').toLowerCase().includes(s)||(t.category||'').toLowerCase().includes(s));}return f;},[txns,filter,q]);
-    const grouped=useMemo(()=>{const g={};filtered.forEach(t=>{if(!g[t.date])g[t.date]=[];g[t.date].push(t)});return Object.entries(g).sort((a,b)=>b[0].localeCompare(a[0]))},[filtered]);
-    const isEmpty = filtered.length === 0;
+    const filtered = useMemo(() => {
+        let f = txns;
+        if (filter !== 'all') f = f.filter(t => t.type === filter);
+        if (q.trim()) {
+            const s = q.toLowerCase();
+            f = f.filter(t => (t.note || '').toLowerCase().includes(s) || (t.category || '').toLowerCase().includes(s));
+        }
+        return f;
+    }, [txns, filter, q]);
 
     return(
         <div className="space-y-4">
             <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"><I.Search/></span><input type="text" placeholder="Cari berdasarkan catatan..." value={q} onChange={e=>setQ(e.target.value)} className="pl-10"/></div>
             <div className="flex gap-2 overflow-x-auto sb-hide">{[{id:'all',l:'Semua'},{id:'expense',l:'Keluar'},{id:'income',l:'Masuk'},{id:'transfer',l:'Transfer'}].map(f=>(<button key={f.id} onClick={()=>setFilter(f.id)} className={`px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${filter===f.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{f.l}</button>))}</div>
-            
-            {isEmpty ? (
-                <div className="text-center py-12 relative">
-                    <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-400">
-                        <I.Dollar />
-                    </div>
-                    <p className="text-dark-300 font-medium mb-1">{q.trim()?`Tidak ditemukan: "${q}"`:'Keuanganmu masih kosong'}</p>
-                    <p className="text-dark-500 text-xs mb-6">Yuk, catat pemasukan atau pengeluaran pertamamu!</p>
-                    <div className="absolute -bottom-10 left-1/2 -translate-x-4 opacity-50">
-                        <svg width="40" height="60" viewBox="0 0 40 60" fill="none" stroke="#94a3b8" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round">
-                            <path d="M 10 0 Q 30 20 20 50" />
-                            <polyline points="10 40 20 50 30 45" />
-                        </svg>
-                    </div>
-                </div>
-            ) : (
-                grouped.map(([date,items])=>(
-                    <div key={date}>
-                        <p className="text-dark-400 text-xs font-medium mb-2">{fmtD(date)}</p>
-                        <div className="space-y-2">{items.map(t=>{
-                            if(t.type==='transfer'){
-                                const fromW=wallets.find(w=>w.id===t.transferFrom);
-                                const toW=wallets.find(w=>w.id===t.transferTo);
-                                return(<SwipeItem key={t.id} onDel={()=>delTxn(t.id)}><div className="p-3 flex items-center gap-3 ch" onClick={()=>openM('txnDetail',t)}><div className="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Transfer/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">Transfer</p><p className="text-[10px] text-dark-400">{fromW?.name} → {toW?.name} -- {fmtT(t.createdAt)}</p></div><span className="text-sm font-bold text-blue-400">{fmtC(t.amount)}</span></div></SwipeItem>);
-                            }
-                            const cat=getCat(t.category)||{name:t.category,color:'#6b7280'};
-                            return(<SwipeItem key={t.id} onDel={()=>delTxn(t.id)}><div className="p-3 flex items-center gap-3 ch" onClick={()=>openM('txnDetail',t)}><CatBadge cat={cat}/><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{t.note||cat.name}</p><p className="text-[10px] text-dark-400 flex items-center gap-1">{cat.name}{t.isRecurring&&<span className="text-blue-400 flex items-center"><I.Repeat/></span>} -- {fmtT(t.createdAt)}</p></div><span className={`text-sm font-bold ${t.type==='income'?'text-green-400':'text-red-400'}`}>{t.type==='income'?'+':'-'}{fmtC(t.amount)}</span></div></SwipeItem>);
-                        })}</div>
-                    </div>
-                ))
-            )}
+            <div className="space-y-2">
+                {filtered.length === 0 ? (
+                    <p className="text-dark-500 text-center py-8">Belum ada transaksi</p>
+                ) : (
+                    filtered.map(t => {
+                        const cat = getCat(t.category) || { name: t.category, color: '#6b7280' };
+                        return (
+                            <div key={t.id} className="bg-dark-700 rounded-xl p-3 flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white" style={{ backgroundColor: cat.color }}>
+                                    {cat.name.charAt(0)}
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm font-medium">{t.note || cat.name}</p>
+                                    <p className="text-xs text-dark-400">{fmtD(t.date)}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className={`text-sm font-bold ${t.type === 'income' ? 'text-green-400' : 'text-red-400'}`}>
+                                        {t.type === 'income' ? '+' : '-'}{fmtC(t.amount)}
+                                    </p>
+                                    <button onClick={() => delTxn(t.id)} className="text-xs text-red-400 mt-1">Hapus</button>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+            </div>
         </div>
     );
 }
 
 function BudgetView({budgets,catSpend,allCats,openM}){
-    const totalB=budgets.reduce((s,b)=>s+b.limit,0);
-    const periodLabel={weekly:'Mingguan',monthly:'Bulanan',custom:'Custom'};
     return(
         <div className="space-y-4">
-            <div className="flex justify-between items-center"><div><p className="text-dark-400 text-xs">Total Budget</p><p className="text-lg font-bold">{fmtC(totalB)}</p></div><button onClick={()=>openM('editBudget')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">Edit Budget</button></div>
-            <div className="space-y-3">{budgets.map(b=>{
-                const spent=catSpend[b.category]||0;const pct=b.limit>0?Math.min(100,(spent/b.limit)*100):0;
-                const cat=allCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};
-                const over=pct>=100;const warn=pct>=70&&!over;
-                const trackedCats=(b.categories||[b.category]).map(cid=>allCats.find(c=>c.id===cid)).filter(Boolean);
-                return(
-                    <div key={b.id} className={`bg-dark-700 rounded-xl p-4 ${over?'border border-red-500/40':''}`}>
-                        <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div>
-                            <div className="flex items-center gap-1">
-                                <span className="text-[9px] bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">{periodLabel[b.period]||'Bulanan'}</span>
-                                {over&&<span className="text-[10px] bg-red-500/20 text-red-400 px-2 py-1 rounded-full font-bold">LEBIH</span>}
-                                {warn&&<span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-1 rounded-full">Hampir</span>}
-                            </div>
-                        </div>
-                        {trackedCats.length>1&&(<div className="flex flex-wrap gap-1 mb-2">{trackedCats.map(tc=><span key={tc.id} className="text-[9px] bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">{tc.name}</span>)}</div>)}
-                        <div className="flex justify-between text-xs mb-2"><span className="text-dark-400">{fmtC(spent)}</span><span className="font-medium">{fmtC(b.limit)}</span></div>
-                        <div className="w-full bg-dark-600 rounded-full h-3"><div className={`h-3 rounded-full bb ${over?'bg-red-500':warn?'bg-yellow-500':'bg-green-500'}`} style={{width:`${pct}%`}}/></div>
-                        <p className="text-[10px] mt-1 text-dark-500">Sisa: {fmtC(Math.max(0,b.limit-spent))}</p>
-                    </div>
-                );
-            })}</div>
+            <p className="text-dark-400 text-sm">Fitur budget coming soon...</p>
         </div>
     );
 }
 
 function DebtView({debts,openM,tog,del}){
-    const pending=debts.filter(d=>d.status==='pending');const paid=debts.filter(d=>d.status==='paid');
-    const totalHutang=pending.filter(d=>d.dtype==='hutang').reduce((s,d)=>s+d.amount,0);
-    const totalPiutang=pending.filter(d=>d.dtype==='piutang').reduce((s,d)=>s+d.amount,0);
     return(
         <div className="space-y-4">
-            <div className="flex justify-between items-center"><p className="text-dark-400 text-sm">Catat hutang & piutang</p><button onClick={()=>openM('addDebt')} className="bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium">+ Tambah</button></div>
-            <div className="grid grid-cols-2 gap-3">
-                <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3"><p className="text-red-400 text-xs">Hutang (Kamu hutang)</p><p className="text-red-400 font-bold text-lg mt-1">{fmtC(totalHutang)}</p></div>
-                <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-3"><p className="text-green-400 text-xs">Piutang (Dihutang kamu)</p><p className="text-green-400 font-bold text-lg mt-1">{fmtC(totalPiutang)}</p></div>
-            </div>
-            {pending.length>0&&<><p className="text-dark-400 text-xs font-medium">Belum Lunas ({pending.length})</p><div className="space-y-2">{pending.map(d=>(<SwipeItem key={d.id} onDel={()=>del(d.id)}><div className="p-3 flex items-center gap-3 ch" onClick={()=>tog(d.id)}><div className={`w-8 h-8 rounded-lg flex items-center justify-center ${d.dtype==='hutang'?'bg-red-500/20 text-red-400':'bg-green-500/20 text-green-400'}`}><I.Handshake/></div><div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{d.name}</p><p className="text-[10px] text-dark-400">{d.dtype==='hutang'?'Kamu hutang':'Dihutang kamu'}{d.dueDate&&` -- Jatuh tempo: ${fmtD(d.dueDate)}`}</p></div><span className={`text-sm font-bold ${d.dtype==='hutang'?'text-red-400':'text-green-400'}`}>{fmtC(d.amount)}</span></div></SwipeItem>))}</div></>}
-            {paid.length>0&&<><p className="text-dark-400 text-xs font-medium mt-4">Lunas ({paid.length})</p><div className="space-y-2">{paid.map(d=>(<SwipeItem key={d.id} onDel={()=>del(d.id)}><div className="p-3 flex items-center gap-3 opacity-50 ch" onClick={()=>tog(d.id)}><div className="w-8 h-8 rounded-lg flex items-center justify-center bg-dark-600 text-dark-400"><I.Check/></div><div className="flex-1 min-w-0"><p className="text-sm line-through">{d.name}</p></div><span className="text-sm text-dark-400">{fmtC(d.amount)}</span></div></SwipeItem>))}</div></>}
-            {debts.length===0&&<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada catatan hutang</p></div>}
+            <p className="text-dark-400 text-sm">Fitur hutang coming soon...</p>
         </div>
     );
 }
 
 function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,openM}){
-    const[sub,setSub]=useState('notes');const[q,setQ]=useState('');const[tag,setTag]=useState('all');
-    const allTags=useMemo(()=>{const s=new Set();notes.forEach(n=>(n.tags||[]).forEach(t=>s.add(t)));return['all',...Array.from(s)]},[notes]);
-    const filtered=useMemo(()=>{let f=notes;if(q)f=f.filter(n=>n.title.toLowerCase().includes(q.toLowerCase())||n.content.toLowerCase().includes(q.toLowerCase()));if(tag!=='all')f=f.filter(n=>(n.tags||[]).includes(tag));return f.sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0)||new Date(b.updatedAt)-new Date(a.updatedAt))},[notes,q,tag]);
-    const pend=todos.filter(t=>!t.completed);const done=todos.filter(t=>t.completed);
     return(
         <div className="space-y-4">
-            <div className="pt-2"><h1 className="text-2xl font-bold">Catatan</h1><p className="text-dark-400 text-sm mt-1">Tulis dan atur semuanya di sini</p></div>
-            <div className="flex gap-1 bg-dark-700 rounded-xl p-1">
-                <button onClick={()=>setSub('notes')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='notes'?'bg-blue-600 text-white':'text-dark-400'}`}>Catatan ({notes.length})</button>
-                <button onClick={()=>setSub('todos')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='todos'?'bg-blue-600 text-white':'text-dark-400'}`}>To-Do ({pend.length})</button>
-            </div>
-            {sub==='notes'&&(<div className="space-y-3">
-                <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"><I.Search/></span><input type="text" placeholder="Cari catatan..." value={q} onChange={e=>setQ(e.target.value)} className="pl-10"/></div>
-                <div className="flex gap-2 overflow-x-auto sb-hide pb-1">{allTags.map(t=>(<button key={t} onClick={()=>setTag(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${tag===t?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{t==='all'?'Semua':`#${t}`}</button>))}</div>
-                {filtered.length>0?<div className="grid grid-cols-2 gap-3">{filtered.map(n=>(<div key={n.id} className="bg-dark-700 rounded-xl p-3 ch cursor-pointer relative" onClick={()=>openM('addNote',n)}>{n.pinned&&<span className="absolute top-2 right-2 text-blue-400"><I.Pin/></span>}<p className="font-medium text-sm truncate pr-5">{n.title||'Tanpa Judul'}</p><p className="text-dark-400 text-xs mt-1" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{n.content}</p><div className="flex items-center justify-between mt-2"><div className="flex gap-1">{(n.tags||[]).slice(0,2).map(t=>(<span key={t} className="text-[9px] bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">#{t}</span>))}</div><span className="text-[9px] text-dark-500">{fmtD(n.updatedAt)}</span></div></div>))}</div>:(<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada catatan</p><button onClick={()=>openM('addNote')} className="mt-3 text-blue-400 text-sm font-medium">+ Buat Catatan</button></div>)}
-            </div>)}
-            {sub==='todos'&&(<div className="space-y-4">
-                <TodoQuick add={addTodo}/>
-                {pend.length>0&&<><p className="text-dark-400 text-xs font-medium">Belum Selesai ({pend.length})</p><div className="space-y-2">{pend.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
-                {done.length>0&&<><p className="text-dark-400 text-xs font-medium mt-4">Selesai ({done.length})</p><div className="space-y-2">{done.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
-                {todos.length===0&&<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada tugas</p></div>}
-            </div>)}
+            <div className="pt-2"><h1 className="text-2xl font-bold">Catatan</h1><p className="text-dark-400 text-sm mt-1">Coming soon...</p></div>
         </div>
     );
 }
 
-function TodoQuick({ add }) {
-    const [t, setT] = useState('');
-    const [deadline, setDeadline] = useState('');
-    const [budget, setBudget] = useState('');
-    const h = e => {
-        e.preventDefault();
-        if (!t.trim()) return;
-        add({ title: t.trim(), deadline: deadline || null, budget: parseFloat(budget) || 0 });
-        setT(''); setDeadline(''); setBudget('');
-    };
-    return (
-        <form onSubmit={h} className="space-y-2">
-            <div className="flex gap-2">
-                <input type="text" placeholder="Tambah tugas baru..." value={t} onChange={e => setT(e.target.value)} className="flex-1" />
-                <button type="submit" className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium shrink-0">+</button>
-            </div>
-            <div className="flex gap-2">
-                <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} className="text-xs flex-1" />
-                <input type="number" placeholder="Est. Biaya (Rp)" value={budget} onChange={e => setBudget(e.target.value)} className="text-xs flex-1" />
-            </div>
-        </form>
-    );
+function WalletIcon({type}){
+    if(type==='cash') return <I.Wallet/>;
+    if(type==='bank') return <I.Building/>;
+    return <I.Phone/>;
 }
 
-function TodoItem({ t, tog }) {
-    return (
-        <div className={`bg-dark-700 rounded-xl p-3 flex items-center gap-3 ${t.completed ? 'opacity-50' : ''}`}>
-            <button onClick={() => tog(t.id)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shrink-0 ${t.completed ? 'bg-green-500 border-green-500' : 'border-dark-400'}`}>
-                {t.completed && <I.Check />}
-            </button>
-            <div className="flex-1 min-w-0">
-                <p className={`text-sm ${t.completed ? 'line-through text-dark-400' : ''}`}>{t.title}</p>
-                <div className="flex items-center gap-2 mt-0.5">
-                    {t.deadline && <p className="text-[10px] text-dark-400 flex items-center gap-1"><I.Cal />{fmtD(t.deadline)}</p>}
-                    {t.budget > 0 && <p className="text-[10px] text-blue-400 font-medium">Est: {fmtC(t.budget)}</p>}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,expCats,incCats,setExpCats,setIncCats,streak,openM,ocrProvider,setOcrProvider,ocrKey,setOcrKey}){
-    const[isInstalled,setIsInstalled]=useState(false);
-    useEffect(()=>{if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone){setIsInstalled(true)}},[]);
-    const handleInstall=async()=>{
-        if(window.deferredPrompt){window.deferredPrompt.prompt();const{outcome}=await window.deferredPrompt.userChoice;window.deferredPrompt=null;}
-        else{alert('Untuk menginstall: buka menu browser (titik tiga) → "Install App" atau "Add to Home Screen"');}
-    };
-    const exp=()=>{const d={wallets,txns,budgets,notes,todos,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
-    const imp=()=>{const fi=document.getElementById('nhImportFile');if(fi)fi.click();};
-    const onImpFile=e=>{
-        const file=e.target.files&&e.target.files[0];e.target.value='';if(!file)return;
-        const reader=new FileReader();
-        reader.onload=ev=>{
-            try{
-                const d=JSON.parse(ev.target.result);
-                const map={wallets:'nh_w',txns:'nh_tx',budgets:'nh_bg',notes:'nh_n',todos:'nh_td',debts:'nh_db',expCats:'nh_ec',incCats:'nh_ic',streak:'nh_sk'};
-                let n=0;
-                Object.entries(map).forEach(([src,dst])=>{if(d[src]!==undefined){localStorage.setItem(dst,JSON.stringify(d[src]));n++;}});
-                ['nh_w','nh_tx','nh_bg','nh_n','nh_td','nh_db','nh_ec','nh_ic','nh_sk'].forEach(k=>{if(d[k]!==undefined){localStorage.setItem(k,d[k]);n++;}});
-                if(!n)throw new Error('empty');
-                if(confirm(`Impor berhasil (${n} grup data). Muat ulang sekarang?`))location.reload();
-            }catch(err){alert('File tidak valid. Gunakan file hasil Ekspor NataHidup.');}
-        };
-        reader.readAsText(file);
-    };
-    const reset=()=>{if(confirm('Hapus semua data? Tindakan ini tidak bisa dibatalkan.')){localStorage.clear();location.reload()}};
+function QuickAddM({close,openM}){
     return(
-        <div className="space-y-4">
-            <div className="pt-2"><h1 className="text-2xl font-bold">Pengaturan</h1><p className="text-dark-400 text-sm mt-1">Kelola aplikasi NataHidup</p></div>
-            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v2.3.0</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
-            {!isInstalled&&(<button onClick={handleInstall} className="w-full bg-blue-600 hover:bg-blue-700 rounded-2xl p-4 flex items-center justify-center gap-3 ch"><I.DL/><span className="font-semibold text-sm">Install App ke Homescreen</span></button>)}
-            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Kategori</h3><div className="space-y-3"><CatEditInline cats={expCats} set={setExpCats} type="expense"/><CatEditInline cats={incCats} set={setIncCats} type="income"/></div></div>
-            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Statistik</h3><div className="space-y-2">
-                <div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-dark-400">To-Do</span><span>{todos.length}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-dark-400">Streak Terpanjang</span><span>{streak.longest} hari</span></div>
-            </div></div>
-            
-            <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
-                <h3 className="font-semibold text-sm">Scan Struk (OCR)</h3>
-                <select value={ocrProvider} onChange={e=>setOcrProvider(e.target.value)}>
-                    <option value="offline">Offline — Tesseract.js (gratis, tanpa internet)</option>
-                    <option value="taggun">Taggun API (online, akurasi tinggi)</option>
-                    <option value="mindee">Mindee API (online)</option>
-                </select>
-                {ocrProvider!=='offline'&&(<div className="space-y-2"><input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>{!navigator.onLine&&<p className="text-[10px] text-yellow-400">Kamu sedang offline — scan akan otomatis memakai OCR offline.</p>}</div>)}
-                <p className="text-[10px] text-dark-500">{ocrProvider==='offline'?'Model bahasa (~5 MB) diunduh sekali saat pertama dipakai, lalu tersimpan di perangkat.':'API key hanya disimpan di perangkatmu (localStorage) dan dikirim langsung ke provider. Jika API gagal atau kamu sedang offline, otomatis fallback ke OCR offline.'}</p>
-            </div>
-            <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
-                <h3 className="font-semibold text-sm">Data & Sinkronisasi</h3>
-                <button onClick={() => openM('p2pSync')} className="w-full flex items-center gap-3 py-3 px-4 bg-blue-600/20 text-blue-400 rounded-xl text-sm ch border border-blue-500/30">
-                    <I.Transfer />
-                    <span>Sinkronisasi P2P (Tanpa Server)</span>
+        <MW close={close} title="Tambah Cepat">
+            <div className="grid grid-cols-2 gap-4">
+                <button onClick={() => { close(); setTimeout(() => openM('addTxn', { type: 'expense' }), 200); }} className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch">
+                    <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-400"><I.Down/></div>
+                    <span className="text-sm font-medium">Pengeluaran</span>
                 </button>
-                <button onClick={imp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
-                    <I.Up />
-                    <span>Impor Data (JSON)</span>
-                </button>
-                <input id="nhImportFile" type="file" accept=".json,application/json" className="hidden" onChange={onImpFile} />
-                <button onClick={exp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
-                    <I.DL />
-                    <span>Ekspor Data (JSON)</span>
-                </button>
-                <button onClick={reset} className="w-full flex items-center gap-3 py-3 px-4 bg-red-500/10 rounded-xl text-sm text-red-400 ch">
-                    <I.Trash />
-                    <span>Reset Semua Data</span>
+                <button onClick={() => { close(); setTimeout(() => openM('addTxn', { type: 'income' }), 200); }} className="bg-green-500/10 border border-green-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch">
+                    <div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center text-green-400"><I.Up/></div>
+                    <span className="text-sm font-medium">Pemasukan</span>
                 </button>
             </div>
-
-            <div className="bg-gradient-to-br from-blue-600/10 to-purple-600/10 border border-blue-500/20 rounded-2xl p-5"><h3 className="font-bold text-sm mb-3 flex items-center gap-2">Tentang NataHidup</h3><div className="space-y-3 text-xs text-dark-300 leading-relaxed"><p>NataHidup lahir dari frustrasi yang sama seperti kamu: buka aplikasi keuangan, malah jadi stress lihat angka merah. Buka notes, malah bingung cari catatan yang mana.</p><p>Kami percaya mengatur hidup nggak harus ribet. Makanya NataHidup didesain sederhana -- catat pengeluaran 5 detik, tulis catatan tanpa ribet, dan lihat progress hematmu dalam bentuk streak yang bikin ketagihan.</p><p className="text-blue-400 font-medium">Fitur favorit kami? Jeda 24 jam di Wishlist. Setiap kali kamu pengen beli barang impulsif, sistem maksa kamu tunggu sehari. 90% dari waktu, keesokan harinya kamu sadar: "Sebenarnya aku nggak butuh ini."</p><p>Itu inti NataHidup: bukan cuma catat, tapi bantu kamu <span className="text-white font-semibold">berpikir ulang sebelum bertindak</span>.</p></div></div>
-            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-2">Streak Milestones</h3><div className="space-y-2 text-xs"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-orange-500"></div><span className="text-dark-300">3 hari -- Mulai Bagus</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-orange-500"></div><span className="text-dark-300">7 hari -- Konsisten</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-orange-500"></div><span className="text-dark-300">14 hari -- Luar Biasa</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-orange-500"></div><span className="text-dark-300">30 hari -- Legendaris</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-yellow-500"></div><span className="text-dark-300">50 hari -- Gold Badge</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-sky-400"></div><span className="text-dark-300">100 hari -- Diamond Badge</span></div><div className="flex items-center gap-2"><div className="w-3 h-3 rounded bg-gradient-to-r from-yellow-400 to-amber-600"></div><span className="text-dark-300">365 hari -- Legendary (satu tahun!)</span></div></div></div>
-        </div>
+        </MW>
     );
 }
-
-function CatEditInline({cats,set,type}){
-    const[newName,setNewName]=useState('');
-    const add=()=>{if(!newName.trim())return;set(p=>[...p,{id:genId(),name:newName.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNewName('')};
-    const del=id=>set(p=>p.filter(c=>c.id!==id));
-    return(<div className="space-y-2"><p className="text-xs text-dark-400 font-medium">{type==='expense'?'Pengeluaran':'Pemasukan'}</p><div className="flex flex-wrap gap-1.5">{cats.map(c=>(<span key={c.id} className="flex items-center gap-1 bg-dark-600 rounded-full px-2.5 py-1 text-xs"><CatBadge cat={c} size="sm"/>{c.name}<button onClick={()=>del(c.id)} className="text-dark-400 ml-1 hover:text-red-400"><I.X/></button></span>))}</div><div className="flex gap-2 mt-1"><input type="text" placeholder="Kategori baru..." value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1 text-xs"/><button onClick={add} className="bg-blue-600 text-white px-3 rounded-lg text-xs font-medium">+</button></div></div>);
-}
-
-function MW({close,children,title}){return(<div className="fixed inset-0 z-50 flex items-end justify-center modal-ov" onClick={close}><div className="absolute inset-0 bg-black/60"/><div className="relative w-full max-w-md bg-dark-800 rounded-t-3xl max-h-[92vh] overflow-y-auto modal-ct sb-hide" onClick={e=>e.stopPropagation()}><div className="sticky top-0 bg-dark-800 pt-3 pb-2 px-5 border-b border-dark-700 z-10"><div className="w-10 h-1 bg-dark-600 rounded-full mx-auto mb-3"/><div className="flex justify-between items-center"><h2 className="text-lg font-bold">{title}</h2><button onClick={close} className="text-dark-400 p-1"><I.X/></button></div></div><div className="p-5">{children}</div></div></div>);}
-
-function QuickAddM({close,openM}){return(<MW close={close} title="Tambah Cepat"><div className="grid grid-cols-2 gap-4"><button onClick={()=>{close();setTimeout(()=>openM('addTxn',{type:'expense'}),200)}} className="bg-red-500/10 border border-red-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center text-red-400"><I.Down/></div><span className="text-sm font-medium">Pengeluaran</span></button><button onClick={()=>{close();setTimeout(()=>openM('addTxn',{type:'income'}),200)}} className="bg-green-500/10 border border-green-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-green-500/20 flex items-center justify-center text-green-400"><I.Up/></div><span className="text-sm font-medium">Pemasukan</span></button><button onClick={()=>{close();setTimeout(()=>openM('addTxn',{type:'transfer'}),200)}} className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Transfer/></div><span className="text-sm font-medium">Transfer</span></button><button onClick={()=>{close();setTimeout(()=>openM('addNote'),200)}} className="bg-purple-500/10 border border-purple-500/30 rounded-2xl p-6 flex flex-col items-center gap-3 ch"><div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400"><I.Notes/></div><span className="text-sm font-medium">Catatan</span></button><button onClick={()=>{close();setTimeout(()=>openM('scanReceipt'),200)}} className="col-span-2 bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex items-center justify-center gap-3 ch"><div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400"><I.Cam/></div><span className="text-sm font-medium">Scan Struk (OCR)</span></button></div></MW>);}
 
 function TxnM({close,save,wallets,expCats,incCats,ed}){
     const[type,setType]=useState(ed?.type||'expense');
@@ -1074,504 +854,116 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
     const[cat,setCat]=useState(ed?.category||'');
     const[note,setNote]=useState(ed?.note||'');
     const[wid,setWid]=useState(ed?.walletId||wallets[0]?.id||'');
-    const[transferFrom,setTransferFrom]=useState(ed?.transferFrom||wallets[0]?.id||'');
-    const[transferTo,setTransferTo]=useState(ed?.transferTo||(wallets[1]?.id||wallets[0]?.id)||'');
     const[date,setDate]=useState(ed?.date||getToday());
-    const[recurring,setRec]=useState(ed?.isRecurring||false);
-    const[recDay,setRecDay]=useState(ed?.recurringDay||new Date().getDate());
     const cats=type==='expense'?expCats:incCats;
-    const amtVal=evalAmt(amt);const amtOk=!isNaN(amtVal)&&amtVal>0;const showCalc=amtOk&&/[+\-*/]/.test(amt);
-    
-    useEffect(()=>{
-        if(type==='transfer' && transferFrom===transferTo && wallets.length>1){
-            const nextW=wallets.find(w=>w.id!==transferFrom);
-            if(nextW) setTransferTo(nextW.id);
-        }
-    },[transferFrom, type, wallets]);
+    const amtVal=evalAmt(amt);
+    const amtOk=!isNaN(amtVal)&&amtVal>0;
 
     const sub=e=>{
         e.preventDefault();
         if(!amtOk)return;
-        if(type==='transfer'){
-            if(!transferFrom||!transferTo||transferFrom===transferTo)return;
-            save({type:'transfer',amount:amtVal,note,transferFrom,transferTo,date});
-        }else{
-            if(!cat)return;
-            save({type,amount:amtVal,category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null});
-        }
+        if(!cat)return;
+        save({type,amount:amtVal,category:cat,note,walletId:wid,date});
     };
     
-    return(<MW close={close} title={ed?'Edit Transaksi':'Tambah Transaksi'}>
-        <form onSubmit={sub} className="space-y-4">
-            <div className="flex gap-2 bg-dark-700 rounded-xl p-1">
-                <button type="button" onClick={()=>{setType('expense');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='expense'?'bg-red-500 text-white':'text-dark-400'}`}>Keluar</button>
-                <button type="button" onClick={()=>{setType('income');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='income'?'bg-green-500 text-white':'text-dark-400'}`}>Masuk</button>
-                <button type="button" onClick={()=>setType('transfer')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='transfer'?'bg-blue-500 text-white':'text-dark-400'}`}>Transfer</button>
-            </div>
-            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp) — bisa ketik hitungan, misal: 50000+12000</label><input type="text" inputMode="decimal" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
-            {type==='transfer'?(
-                <>
-                    <div><label className="text-xs text-dark-400 mb-1 block">Dari Dompet</label><select value={transferFrom} onChange={e=>setTransferFrom(e.target.value)}>{wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}</select></div>
-                    <div><label className="text-xs text-dark-400 mb-1 block">Ke Dompet</label>
-                        <select value={transferTo} onChange={e=>setTransferTo(e.target.value)}>
-                            {wallets.filter(w=>w.id!==transferFrom).map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}
-                        </select>
-                    </div>
-                    <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3"><p className="text-xs text-blue-400">Transfer tidak dihitung sebagai pengeluaran atau pemasukan. Hanya memindahkan saldo antar dompet.</p></div>
-                </>
-            ):(
-                <div><label className="text-xs text-dark-400 mb-2 block">Kategori</label><div className="grid grid-cols-3 gap-2">{cats.map(c=>(<button key={c.id} type="button" onClick={()=>setCat(c.id)} className={`p-2.5 rounded-xl text-center transition-all ${cat===c.id?'bg-blue-500/20 border-2 border-blue-500':'bg-dark-700 border-2 border-transparent'}`}><CatBadge cat={c} size="sm"/><p className="text-[9px] mt-1 truncate">{c.name}</p></button>))}</div></div>
-            )}
-            <div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Deskripsi singkat" value={note} onChange={e=>setNote(e.target.value)}/></div>
-            {type!=='transfer'&&(
-                <div><label className="text-xs text-dark-400 mb-1 block">Dompet</label><select value={wid} onChange={e=>setWid(e.target.value)}>{wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}</select></div>
-            )}
-            <div><label className="text-xs text-dark-400 mb-1 block">Tanggal</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-            {type!=='transfer'&&(
-                <>
-                    <label className="flex items-center gap-3 py-2 cursor-pointer">
-                        <input type="checkbox" checked={recurring} onChange={e=>setRec(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
-                        <div><span className="text-sm">Transaksi Berulang</span><p className="text-[10px] text-dark-400">Otomatis dicatat setiap bulan</p></div>
-                    </label>
-                    {recurring&&<div><label className="text-xs text-dark-400 mb-1 block">Tanggal Berulang (tiap bulan)</label><input type="number" min="1" max="28" value={recDay} onChange={e=>setRecDay(parseInt(e.target.value)||1)}/></div>}
-                </>
-            )}
-            <button type="submit" disabled={!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
-        </form>
-    </MW>);
-}
-
-function NoteM({close,save,ed}){
-    const[title,setTitle]=useState(ed?.title||'');const[content,setContent]=useState(ed?.content||'');const[tags,setTags]=useState(ed?.tags?.join(', ')||'');const[pinned,setPinned]=useState(ed?.pinned||false);
-    const sub=e=>{e.preventDefault();if(!content.trim()&&!title.trim())return;save({title:title.trim(),content:content.trim(),tags:tags.split(',').map(t=>t.trim()).filter(Boolean),pinned});close()};
-    return(<MW close={close} title={ed?.id?'Edit Catatan':'Catatan Baru'}><form onSubmit={sub} className="space-y-4"><input type="text" placeholder="Judul catatan..." value={title} onChange={e=>setTitle(e.target.value)} className="text-lg font-bold"/><textarea placeholder="Tulis catatan..." value={content} onChange={e=>setContent(e.target.value)} rows={8} className="resize-none"/><div><label className="text-xs text-dark-400 mb-1 block">Tags (pisahkan dengan koma)</label><input type="text" placeholder="Kerjaan, Pribadi, Ide" value={tags} onChange={e=>setTags(e.target.value)}/></div><label className="flex items-center gap-3 py-2 cursor-pointer"><input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)} className="w-4 h-4 accent-blue-600"/><span className="text-sm flex items-center gap-1"><I.Pin/> Sematkan di atas</span></label><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
-}
-
-function WalletM({close,save}){
-    const[name,setName]=useState('');const[type,setType]=useState('cash');
-    const sub=e=>{e.preventDefault();if(!name.trim())return;save({name:name.trim(),type});close()};
-    return(<MW close={close} title="Tambah Dompet"><form onSubmit={sub} className="space-y-4"><div><label className="text-xs text-dark-400 mb-1 block">Nama</label><input type="text" placeholder="Contoh: BCA, GoPay" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-2 block">Tipe</label><div className="grid grid-cols-3 gap-2">{[{id:'cash',l:'Cash'},{id:'bank',l:'Bank'},{id:'ewallet',l:'E-Wallet'}].map(t=>(<button key={t.id} type="button" onClick={()=>setType(t.id)} className={`py-3 rounded-xl text-sm flex flex-col items-center gap-1 ${type===t.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}><WalletIcon type={t.id}/><span className="text-[10px]">{t.l}</span></button>))}</div></div><p className="text-xs text-dark-400">Saldo awal otomatis Rp 0. Tambahkan melalui transaksi pemasukan atau transfer.</p><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
-}
-
-function BudgetM({close,budgets,expCats,save}){
-    const[local,setLocal]=useState(budgets);
-    const upd=(id,field,v)=>setLocal(p=>p.map(b=>b.id===id?{...b,[field]:field==='limit'?parseFloat(v)||0:v}:b));
-    const toggleCategory=(budgetId,catId)=>{setLocal(p=>p.map(b=>{if(b.id!==budgetId) return b;const cats=b.categories||[b.category];const has=cats.includes(catId);return{...b,categories:has?cats.filter(c=>c!==catId):[...cats,catId]};}))};
-    return(<MW close={close} title="Atur Budget"><div className="space-y-4"><p className="text-dark-400 text-xs">Atur limit, periode, dan kategori yang dipantau.</p>{local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};const trackedCats=b.categories||[b.category];return(<div key={b.id} className="bg-dark-700 rounded-xl p-3 space-y-3"><div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div><div><label className="text-[10px] text-dark-400 mb-1 block">Limit</label><input type="number" value={b.limit} onChange={e=>upd(b.id,'limit',e.target.value)} className="text-sm"/></div><div><label className="text-[10px] text-dark-400 mb-1 block">Periode</label><select value={b.period||'monthly'} onChange={e=>upd(b.id,'period',e.target.value)} className="text-sm"><option value="weekly">Mingguan</option><option value="monthly">Bulanan</option><option value="custom">Custom</option></select></div><div><label className="text-[10px] text-dark-400 mb-1 block">Kategori Dipantau</label><div className="flex flex-wrap gap-1.5">{expCats.map(ec=>(<button key={ec.id} type="button" onClick={()=>toggleCategory(b.id,ec.id)} className={`px-2 py-1 rounded text-[10px] transition-all ${trackedCats.includes(ec.id)?'bg-blue-500/30 text-blue-300 border border-blue-500/50':'bg-dark-600 text-dark-400 border border-transparent'}`}>{ec.name}</button>))}</div></div></div>)})}<button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></div></MW>);
-}
-
-function DebtM({close,save}){
-    const[name,setName]=useState('');const[dtype,setDtype]=useState('hutang');const[amt,setAmt]=useState('');const[due,setDue]=useState('');const[note,setNote]=useState('');
-    const sub=e=>{e.preventDefault();if(!name.trim()||!amt)return;save({name:name.trim(),dtype,amount:parseFloat(amt),dueDate:due||null,note:note.trim()});close()};
-    return(<MW close={close} title="Tambah Hutang / Piutang"><form onSubmit={sub} className="space-y-4"><div className="flex gap-2 bg-dark-700 rounded-xl p-1"><button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang</button><button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang</button></div><div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
-}
-
-function TxnDetailM({txn,close,del,getCat,wallets}){
-    const cat=getCat(txn.category)||{name:txn.category,color:'#6b7280'};
-    const fromW=wallets.find(w=>w.id===txn.transferFrom);
-    const toW=wallets.find(w=>w.id===txn.transferTo);
-    return(<MW close={close} title="Detail Transaksi"><div className="space-y-4">{txn.type==='transfer'?(<div className="text-center py-4"><div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 mx-auto"><I.Transfer/></div><p className="text-2xl font-bold mt-2 text-blue-400">{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">Transfer</p><p className="text-xs text-dark-500 mt-1">{fromW?.name} → {toW?.name}</p></div>):(<div className="text-center py-4"><CatBadge cat={cat} size="lg"/><p className={`text-2xl font-bold mt-2 ${txn.type==='income'?'text-green-400':'text-red-400'}`}>{txn.type==='income'?'+':'-'}{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">{cat.name}</p></div>)}<div className="bg-dark-700 rounded-xl p-4 space-y-3">{txn.note&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Catatan</span><span className="text-sm">{txn.note}</span></div>}<div className="flex justify-between"><span className="text-dark-400 text-sm">Tanggal</span><span className="text-sm">{fmtD(txn.date)}</span></div><div className="flex justify-between"><span className="text-dark-400 text-sm">Waktu</span><span className="text-sm">{fmtT(txn.createdAt)}</span></div>{txn.type!=='transfer'&&txn.isRecurring&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Berulang</span><span className="text-sm text-blue-400 flex items-center gap-1"><I.Repeat/> Tanggal {txn.recurringDay}</span></div>}</div>
-    <button onClick={del} className="w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30">
-        Hapus Transaksi
-    </button>
-    </div></MW>);
-}
-
-function CatEditM({close,cats,save,type}){
-    const[local,setLocal]=useState(cats);const[nn,setNn]=useState('');
-    const add=()=>{if(!nn.trim())return;setLocal(p=>[...p,{id:genId(),name:nn.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNn('')};
-    const del=id=>setLocal(p=>p.filter(c=>c.id!==id));
-    return(<MW close={close} title={`Edit Kategori ${type==='expense'?'Pengeluaran':'Pemasukan'}`}><div className="space-y-3">{local.map(c=>(<div key={c.id} className="flex items-center justify-between bg-dark-700 rounded-xl p-3"><div className="flex items-center gap-2"><CatBadge cat={c} size="sm"/><span className="text-sm">{c.name}</span></div><button onClick={()=>del(c.id)} className="text-dark-400"><I.Trash/></button></div>))}<div className="flex gap-2"><input type="text" placeholder="Nama kategori..." value={nn} onChange={e=>setNn(e.target.value)}/><button onClick={add} className="bg-blue-600 text-white px-4 rounded-lg text-sm">+</button></div><button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 mt-2">Simpan</button></div></MW>);
-}
-
-function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets }) {
-    const [realCost, setRealCost] = useState(todo.budget.toString());
-    const [walletId, setWalletId] = useState(wallets[0]?.id || '');
-    
-    const handleConfirm = (e) => {
-        e.preventDefault();
-        completeWithExpense(todo.id, parseFloat(realCost) || 0, walletId);
-    };
-    
-    const handleSkip = () => {
-        skipTodoExpense(todo.id);
-    };
-
-    return (
-        <MW close={close} title="Tugas Selesai!">
-            <form onSubmit={handleConfirm} className="space-y-4">
-                <p className="text-sm text-dark-300">"<strong>{todo.title}</strong>" selesai.</p>
-                <p className="text-sm text-dark-400">Estimasi biaya: {fmtC(todo.budget)}. Catat sebagai pengeluaran?</p>
-                <div>
-                    <label className="text-xs text-dark-400 mb-1 block">Nominal Realisasi (Rp)</label>
-                    <input type="number" value={realCost} onChange={e => setRealCost(e.target.value)} className="text-xl font-bold text-center" autoFocus />
+    return(
+        <MW close={close} title={ed?'Edit Transaksi':'Tambah Transaksi'}>
+            <form onSubmit={sub} className="space-y-4">
+                <div className="flex gap-2 bg-dark-700 rounded-xl p-1">
+                    <button type="button" onClick={()=>{setType('expense');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='expense'?'bg-red-500 text-white':'text-dark-400'}`}>Keluar</button>
+                    <button type="button" onClick={()=>{setType('income');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='income'?'bg-green-500 text-white':'text-dark-400'}`}>Masuk</button>
                 </div>
                 <div>
-                    <label className="text-xs text-dark-400 mb-1 block">Dari Dompet</label>
-                    <select value={walletId} onChange={e => setWalletId(e.target.value)}>
-                        {wallets.map(w => (<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}
+                    <label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label>
+                    <input type="text" inputMode="decimal" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/>
+                </div>
+                <div>
+                    <label className="text-xs text-dark-400 mb-2 block">Kategori</label>
+                    <div className="grid grid-cols-3 gap-2">
+                        {cats.map(c=>(
+                            <button key={c.id} type="button" onClick={()=>setCat(c.id)} className={`p-2.5 rounded-xl text-center transition-all ${cat===c.id?'bg-blue-500/20 border-2 border-blue-500':'bg-dark-700 border-2 border-transparent'}`}>
+                                <div className="w-8 h-8 rounded-lg mx-auto flex items-center justify-center text-white text-sm font-bold" style={{backgroundColor:c.color}}>
+                                    {c.name.charAt(0)}
+                                </div>
+                                <p className="text-[9px] mt-1 truncate">{c.name}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div>
+                    <label className="text-xs text-dark-400 mb-1 block">Catatan</label>
+                    <input type="text" placeholder="Deskripsi singkat" value={note} onChange={e=>setNote(e.target.value)}/>
+                </div>
+                <div>
+                    <label className="text-xs text-dark-400 mb-1 block">Dompet</label>
+                    <select value={wid} onChange={e=>setWid(e.target.value)}>
+                        {wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}
                     </select>
                 </div>
-                <div className="flex gap-3 mt-4">
-                    <button type="button" onClick={handleSkip} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Lewati</button>
-                    <button type="submit" className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600">Catat Pengeluaran</button>
+                <div>
+                    <label className="text-xs text-dark-400 mb-1 block">Tanggal</label>
+                    <input type="date" value={date} onChange={e=>setDate(e.target.value)}/>
                 </div>
+                <button type="submit" disabled={!amtOk||!cat} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amtOk||!cat?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
             </form>
         </MW>
     );
 }
 
-function P2PSync({ close }) {
-    const [step, setStep] = useState('menu');
-    const [status, setStatus] = useState('');
-    const [pc, setPc] = useState(null);
-    const [scanner, setScanner] = useState(null);
-    const [camError, setCamError] = useState(false);
-    const [pasteTxt, setPasteTxt] = useState('');
-
-    useEffect(() => {
-        return () => {
-            if (scanner) scanner.stop().catch(() => {});
-            if (pc) pc.close();
-        };
-    }, [scanner, pc]);
-
-    const waitForIce = (peerConnection) => {
-        return new Promise(resolve => {
-            if (peerConnection.iceGatheringState === 'complete') resolve();
-            else {
-                const check = () => {
-                    if (peerConnection.iceGatheringState === 'complete') {
-                        peerConnection.removeEventListener('icegatheringstatechange', check);
-                        resolve();
-                    }
-                };
-                peerConnection.addEventListener('icegatheringstatechange', check);
-            }
-        });
-    };
-
-    const startHost = async () => {
-        setStatus('Membuat koneksi...');
-        const newPc = new RTCPeerConnection();
-        const dc = newPc.createDataChannel('nata_sync');
-        
-        dc.onopen = () => {
-            setStatus('Mengirim data...');
-            const payload = {
-                nh_w: localStorage.getItem('nh_w'), nh_tx: localStorage.getItem('nh_tx'),
-                nh_bg: localStorage.getItem('nh_bg'), nh_n: localStorage.getItem('nh_n'),
-                nh_td: localStorage.getItem('nh_td'), nh_db: localStorage.getItem('nh_db'),
-                nh_ec: localStorage.getItem('nh_ec'), nh_ic: localStorage.getItem('nh_ic'),
-                nh_sk: localStorage.getItem('nh_sk')
-            };
-            const compressed = LZString.compressToUTF16(JSON.stringify(payload));
-            dc.send(compressed);
-            setStatus('✅ Data berhasil dikirim!');
-        };
-
-        const offer = await newPc.createOffer();
-        offer.sdp = mungeSdp(offer.sdp);
-        await newPc.setLocalDescription(offer);
-        await waitForIce(newPc);
-        
-        setPc(newPc);
-        setStep('host_qr');
-        setStatus('Scan QR ini dengan HP Baru (Pilih "Terima Data")');
-    };
-
-    const startGuest = () => {
-        setStep('guest_scan');
-        setCamError(false);
-        setStatus('Arahkan kamera ke QR Code di HP Lama...');
-        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
-        setTimeout(() => {
-            const html5QrCode = new Html5Qrcode("qr-reader");
-            setScanner(html5QrCode);
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                async (decodedText) => {
-                    await html5QrCode.stop();
-                    setScanner(null);
-                    processOffer(decodedText);
-                },
-                () => {}
-            ).catch(() => setCamError(true));
-        }, 300);
-    };
-
-    const processOffer = async (decodedText) => {
-        try {
-        setStatus('Memproses koneksi...');
-        const newPc = new RTCPeerConnection();
-        
-        newPc.ondatachannel = (event) => {
-            const dc = event.channel;
-            dc.onmessage = (e) => {
-                setStatus('Menerima data...');
-                const jsonStr = LZString.decompressFromUTF16(e.data);
-                const payload = JSON.parse(jsonStr);
-                
-                Object.keys(payload).forEach(key => {
-                    if (payload[key]) localStorage.setItem(key, payload[key]);
-                });
-                
-                setStatus('✅ Data berhasil diterima! Memuat ulang...');
-                setTimeout(() => window.location.reload(), 1500);
-            };
-        };
-
-        const offerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(decodedText));
-        await newPc.setRemoteDescription(offerSdp);
-        const answer = await newPc.createAnswer();
-        answer.sdp = mungeSdp(answer.sdp);
-        await newPc.setLocalDescription(answer);
-        await waitForIce(newPc);
-        
-        setPc(newPc);
-        setStep('guest_qr');
-        setStatus('Scan QR ini dengan HP Lama untuk menyelesaikan');
-        } catch (err) {
-            setStatus('❌ Teks SDP tidak valid. Pastikan salinan lengkap, lalu tempel lagi.');
-            setCamError(true);
-        }
-    };
-
-    const completeHandshake = () => {
-        setStep('host_scan');
-        setCamError(false);
-        setStatus('Arahkan kamera ke QR Code di HP Baru...');
-        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
-        setTimeout(() => {
-            const html5QrCode = new Html5Qrcode("qr-reader");
-            setScanner(html5QrCode);
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                async (decodedText) => {
-                    await html5QrCode.stop();
-                    setScanner(null);
-                    const answerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(decodedText));
-                    await pc.setRemoteDescription(answerSdp);
-                    setStatus('Handshake berhasil! Mengirim data...');
-                },
-                () => {}
-            ).catch(() => setCamError(true));
-        }, 300);
-    };
-
-    const renderQR = (data) => {
-        const raw = typeof data === 'string' ? data : JSON.stringify(data);
-        try {
-            if (typeof qrcode !== 'function') throw new Error('Modul QR tidak termuat');
-            const compressed = LZString.compressToEncodedURIComponent(raw);
-            const qr = qrcode(0, 'L');
-            qr.addData(compressed);
-            qr.make();
-            if (qr.getModuleCount() > 120) throw new Error('Data QR terlalu padat untuk dipindai');
-            return <div className="flex justify-center my-4" dangerouslySetInnerHTML={{ __html: qr.createImgTag(4, 8) }} />;
-        } catch (e) {
-            const compressed = LZString.compressToEncodedURIComponent(raw);
-            return (
-                <div className="my-4 space-y-2">
-                    <p className="text-xs text-yellow-400 text-center">⚠️ QR otomatis gagal ({e.message}). Salin teks ini, kirim via WA/Telegram, lalu tempel di HP lain.</p>
-                    <textarea readOnly rows={6} value={compressed} className="text-[10px] leading-tight" onFocus={ev => ev.target.select()} />
-                    <button type="button" onClick={ev => { if (navigator.clipboard) navigator.clipboard.writeText(compressed).then(() => { ev.target.textContent = '✅ Tersalin!'; }).catch(() => {}); }} className="w-full py-2 rounded-lg bg-dark-600 text-xs font-medium">Salin Teks</button>
+function MW({close,children,title}){
+    return(
+        <div className="fixed inset-0 z-50 flex items-end justify-center modal-ov" onClick={close}>
+            <div className="absolute inset-0 bg-black/60"/>
+            <div className="relative w-full max-w-md bg-dark-800 rounded-t-3xl max-h-[92vh] overflow-y-auto modal-ct sb-hide" onClick={e=>e.stopPropagation()}>
+                <div className="sticky top-0 bg-dark-800 pt-3 pb-2 px-5 border-b border-dark-700 z-10">
+                    <div className="w-10 h-1 bg-dark-600 rounded-full mx-auto mb-3"/>
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-bold">{title}</h2>
+                        <button onClick={close} className="text-dark-400 p-1"><I.X/></button>
+                    </div>
                 </div>
-            );
-        }
-    };
-
-    return (
-        <MW close={close} title="Sinkronisasi P2P">
-            <div className="space-y-4 text-center">
-                <p className="text-xs text-dark-400">Pindahkan data antar perangkat via Wi-Fi Lokal/Hotspot. 100% Offline & Privat.</p>
-                
-                {step === 'menu' && (
-                    <div className="space-y-3 mt-4">
-                        <button onClick={startHost} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600">📤 Kirim Data (HP Lama)</button>
-                        <button onClick={startGuest} className="w-full py-3 rounded-xl font-semibold text-white bg-dark-700 border border-dark-600">📥 Terima Data (HP Baru)</button>
-                    </div>
-                )}
-
-                {step === 'host_qr' && (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        {renderQR(JSON.stringify(pc.localDescription))}
-                        <button onClick={completeHandshake} className="w-full py-3 rounded-xl font-semibold text-white bg-green-600 mt-4">Scan QR Jawaban (HP Baru)</button>
-                    </div>
-                )}
-
-                {step === 'guest_scan' && (
-                    camError ? <CamError onBack={() => { setCamError(false); setStep('menu'); }} onPaste={(txt) => { setCamError(false); processOffer(txt); }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
-                    </div>
-                    )
-                )}
-
-                {step === 'guest_qr' && (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-green-400">{status}</p>
-                        {renderQR(JSON.stringify(pc.localDescription))}
-                    </div>
-                )}
-
-                {step === 'host_scan' && (
-                    camError ? <CamError onBack={() => { setCamError(false); setStep('host_qr'); }} onPaste={async (txt) => {
-                        try {
-                            const answerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(txt));
-                            await pc.setRemoteDescription(answerSdp);
-                            setCamError(false);
-                            setStatus('Handshake berhasil! Mengirim data...');
-                        } catch (e2) { setStatus('❌ Teks jawaban tidak valid, coba lagi.'); }
-                    }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
-                    </div>
-                    )
-                )}
-                
-                <button onClick={close} className="w-full py-3 rounded-xl font-semibold text-dark-300 bg-dark-700 mt-4">Tutup</button>
+                <div className="p-5">{children}</div>
             </div>
-        </MW>
+        </div>
     );
 }
 
-function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw}){
-    const[step,setStep]=useState('menu');
-    const[prog,setProg]=useState(0);
-    const[status,setStatus]=useState('');
-    const[err,setErr]=useState('');
-    const[camErr,setCamErr]=useState(false);
-    const[amt,setAmt]=useState('');
-    const[note,setNote]=useState('');
-    const[date,setDate]=useState(getToday());
-    const[cat,setCat]=useState('');
-    const videoRef=useRef(null);
-    const streamRef=useRef(null);
-    const fileRef=useRef(null);
-    const amtVal=evalAmt(amt);
-    const showCalc=!isNaN(amtVal)&&/[+\-*/]/.test(amt);
-
-    useEffect(()=>()=>{if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop())},[]);
-
-    const stopCam=()=>{if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}};
-
-    const startCam=async()=>{
-        setErr('');setCamErr(false);
-        try{
-            const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
-            streamRef.current=stream;setStep('camera');
-            setTimeout(()=>{if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play().catch(()=>{});}},150);
-        }catch(e){setCamErr(true);}
-    };
-
-    const process=async blob=>{
-        stopCam();setErr('');setStep('processing');setProg(0);
-        setStatus(ocrProvider!=='offline'&&ocrKey&&navigator.onLine?'Mengirim gambar ke API OCR...':'Menyiapkan OCR offline...');
-        try{
-            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l)setStatus(l);});
-            setAmt(String(r.amount||''));setNote(r.note||'');setDate(r.date||getToday());setCat(r.category||'');
-            setStep('confirm');
-        }catch(e){
-            setStep('menu');setErr('❌ '+(e&&e.message?e.message:'OCR gagal. Coba foto lebih dekat & terang.'));
-        }
-    };
-
-    const capture=()=>{
-        const v=videoRef.current;if(!v||!v.videoWidth)return;
-        const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
-        c.getContext('2d').drawImage(v,0,0);
-        c.toBlob(b=>{if(b)process(b);},'image/jpeg',0.92);
-    };
-
-    const onFile=e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)process(f);};
-
-    // 4. Modifikasi fungsi confirmGo di dalam komponen <ScanReceiptM/>
-    const confirmGo = () => {
-        const a = evalAmt(String(amt));
-        if (isNaN(a) || a <= 0) { setErr('Nominal tidak valid'); return; }
-        
-        const finalNote = note.trim();
-        
-        // Proses Auto-Learn saat menyimpan form
-        if (finalNote && cat && typeof setLearnedKw === 'function') {
-            const keyword = finalNote.toLowerCase().split(' ').slice(0, 2).join(' ');
-            if (keyword.length > 3) {
-                setLearnedKw(prev => ({ ...prev, [keyword]: cat }));
-            }
-        }
-        
-        const payload = { type: 'expense', amount: a, note: finalNote, date: date || getToday() };
-        if (cat) payload.category = cat;
-        stopCam(); close();
-        setTimeout(() => openM('addTxn', payload), 200);
+function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,expCats,incCats,setExpCats,setIncCats,streak,openM,ocrProvider,setOcrProvider,ocrKey,setOcrKey,session}){
+    const handleLogout = async () => {
+        await sb.auth.signOut();
+        window.location.reload();
     };
 
     return(
-        <MW close={close} title="Scan Struk (OCR)">
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onFile}/>
-            <div className="space-y-4">
-                {step==='menu'&&(
-                    <div className="space-y-3">
-                        {err&&<p className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-xl p-3">{err}</p>}
-                        <p className="text-xs text-dark-400">Foto struk belanja — OCR mengisi nominal, tanggal & nama toko otomatis. Kamu tetap bisa mengoreksi hasilnya sebelum disimpan.</p>
-                        {camErr&&<CamError onBack={()=>setCamErr(false)}/>}
-                        {!camErr&&(
-                            <div className="grid grid-cols-2 gap-3">
-                                <button onClick={startCam} className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 flex flex-col items-center gap-2 ch"><div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400"><I.Cam/></div><span className="text-sm font-medium">Foto Struk</span></button>
-                                <button onClick={()=>fileRef.current&&fileRef.current.click()} className="bg-dark-700 rounded-2xl p-5 flex flex-col items-center gap-2 ch"><div className="w-10 h-10 rounded-xl bg-dark-600 flex items-center justify-center text-dark-300"><I.DL/></div><span className="text-sm font-medium">Dari Galeri</span></button>
-                            </div>
-                        )}
-                        <p className="text-[10px] text-dark-500 text-center">Mode aktif: {ocrProvider==='offline'?'Offline (Tesseract.js)':ocrProvider==='taggun'?'Taggun API':'Mindee API'}{ocrProvider!=='offline'&&' — otomatis fallback ke offline jika gagal'}. Ubah di Pengaturan.</p>
-                    </div>
-                )}
-                {step==='camera'&&(
-                    <div className="space-y-3">
-                        <div className="relative rounded-2xl overflow-hidden bg-black">
-                            <video ref={videoRef} playsInline muted className="w-full"/>
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                                <div className="w-72 h-44 border-2 border-dashed border-amber-400 rounded-xl"/>
-                            </div>
-                        </div>
-                        <p className="text-xs text-dark-300 text-center">Posisikan bagian <b>TOTAL</b> & nama toko dalam kotak.<br/>Pastikan struk rata dan pencahayaan terang.</p>
-                        <div className="flex gap-3">
-                            <button onClick={()=>{stopCam();setStep('menu');}} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Kembali</button>
-                            <button onClick={capture} className="flex-1 py-3 rounded-xl font-semibold text-dark-900 bg-amber-400">📸 Ambil Foto</button>
-                        </div>
-                    </div>
-                )}
-                {step==='processing'&&(
-                    <div className="space-y-4 text-center py-6">
-                        <div className="w-14 h-14 border-4 border-dark-600 border-t-amber-400 rounded-full animate-spin mx-auto"/>
-                        <p className="text-sm font-medium">{status||'Memproses...'}</p>
-                        <div className="w-full bg-dark-600 rounded-full h-2"><div className="h-2 rounded-full bg-amber-400 bb" style={{width:`${Math.min(100,Math.max(3,prog))}%`}}/></div>
-                        <p className="text-[10px] text-dark-500">Pemakaian pertama butuh mengunduh model bahasa (~5 MB). Setelah itu pemindaian jauh lebih cepat.</p>
-                    </div>
-                )}
-                {step==='confirm'&&(
-                    <div className="space-y-4">
-                        <p className="text-sm text-dark-300">Periksa hasil ekstraksi. <span className="text-amber-400">OCR bisa salah baca angka</span> (mis. 8 → B), pastikan nominal benar.</p>
-                        <div><label className="text-xs text-dark-400 mb-1 block">Nominal (Rp)</label><input type="text" inputMode="decimal" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center"/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
-                        <div><label className="text-xs text-dark-400 mb-1 block">Tanggal</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-                        <div><label className="text-xs text-dark-400 mb-1 block">Nama Toko / Catatan</label><input type="text" value={note} onChange={e=>setNote(e.target.value)}/></div>
-                        <div><label className="text-xs text-dark-400 mb-2 block">Kategori (opsional)</label><div className="grid grid-cols-3 gap-2">{expCats.map(c=>(<button key={c.id} type="button" onClick={()=>setCat(cat===c.id?'':c.id)} className={`p-2.5 rounded-xl text-center transition-all ${cat===c.id?'bg-blue-500/20 border-2 border-blue-500':'bg-dark-700 border-2 border-transparent'}`}><CatBadge cat={c} size="sm"/><p className="text-[9px] mt-1 truncate">{c.name}</p></button>))}</div></div>
-                        <div className="flex gap-3">
-                            <button onClick={()=>{setErr('');setStep('menu');}} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Ulangi</button>
-                            <button onClick={confirmGo} className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600">Isi ke Form ✓</button>
-                        </div>
+        <div className="space-y-4">
+            <div className="pt-2"><h1 className="text-2xl font-bold">Pengaturan</h1><p className="text-dark-400 text-sm mt-1">Kelola aplikasi NataHidup</p></div>
+            <div className="bg-dark-700 rounded-2xl p-5 text-center">
+                <h2 className="text-xl font-bold">NataHidup ☁️</h2>
+                <p className="text-dark-400 text-sm mt-1">v3.0.0 (Online)</p>
+                <p className="text-xs text-dark-500 mt-2 break-all">{session.user.email}</p>
+            </div>
+            <button onClick={handleLogout} className="w-full py-3 rounded-xl font-semibold text-white bg-red-600">
+                Logout
+            </button>
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <h3 className="font-semibold text-sm mb-3">Scan Struk (OCR)</h3>
+                <select value={ocrProvider} onChange={e=>setOcrProvider(e.target.value)}>
+                    <option value="offline">Offline — Tesseract.js</option>
+                    <option value="taggun">Taggun API</option>
+                    <option value="mindee">Mindee API</option>
+                </select>
+                {ocrProvider!=='offline'&&(
+                    <div className="mt-2">
+                        <input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>
                     </div>
                 )}
             </div>
-        </MW>
+        </div>
     );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+// Render aplikasi
+ReactDOM.createRoot(document.getElementById('root')).render(<AppWrapper/>);
 </script>
 </body>
 </html>
