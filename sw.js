@@ -1,4 +1,4 @@
-const CACHE_NAME = 'natahidup-v4'; 
+const CACHE_NAME = 'natahidup-v5'; 
 const urlsToCache = [
   '/',
   '/index.html',
