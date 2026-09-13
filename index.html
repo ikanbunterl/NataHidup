@@ -61,8 +61,6 @@
         .page-enter{animation:pageIn .25s ease-out}
         @keyframes pageIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
     </style>
-<base target="_blank">
-<base target="_blank">
 </head>
 <body class="min-h-screen max-w-md mx-auto relative">
 <div id="root"></div>
@@ -127,12 +125,9 @@ const genId=()=>Date.now().toString(36)+Math.random().toString(36).substr(2);
 const getToday=()=>new Date().toISOString().split('T')[0];
 const getMY=()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`};
 const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
-// Kalkulator input nominal: evaluasi ekspresi sederhana seperti "50000+12000"
 const evalAmt=s=>{try{if(!/[+\-*/]/.test(s))return parseFloat(s);if(!/^[\d+\-*/().\s]+$/.test(s)||!/\d/.test(s))return NaN;const r=Function('"use strict";return('+s+')')();return typeof r==='number'&&isFinite(r)?Math.round(r):NaN;}catch(e){return NaN;}};
-// SDP Munging: buang ice-candidate IPv6/non-UDP agar QR lebih kecil & mudah dipindai
 const mungeSdp=sdp=>{try{return sdp.split(/\r?\n/).filter(line=>{if(!line.startsWith('a=candidate'))return true;const p=line.split(' ');const addr=p[4]||'';return p[2]==='udp'&&addr!==''&&!addr.includes(':');}).join('\r\n');}catch(e){return sdp;}};
 
-// ===== OCR STRUK: lazy-load Tesseract, parsing regex, provider Taggun/Mindee =====
 const ensureTesseract=()=>new Promise((res,rej)=>{
     if(typeof Tesseract!=='undefined')return res();
     const s=document.createElement('script');
@@ -141,64 +136,152 @@ const ensureTesseract=()=>new Promise((res,rej)=>{
     document.head.appendChild(s);
 });
 const normDate=s=>{if(!s)return'';s=String(s).trim();let m=s.match(/(\d{4})-(\d{2})-(\d{2})/);if(m)return`${m[1]}-${m[2]}-${m[3]}`;m=s.match(/\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b/);if(m){const y=m[3].length===2?'20'+m[3]:m[3];return`${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;}return'';};
-const toNum=n=>{n=String(n).replace(/rp\.?/gi,'').replace(/\s/g,'');if(!n)return 0;if(n.indexOf(',')>=0&&/,\d{3}/.test(n))n=n.replace(/,/g,'');else n=n.replace(/\./g,'').replace(',','.');const v=parseFloat(n);return isFinite(v)?v:0;};
-const guessCat=text=>{const t=String(text).toLowerCase();if(/(spbu|bensin|pertalite|pertamax|shell|parkir|\btol\b|gojek|grab|krl|mrt|angkot|ojol)/.test(t))return'transport';if(/(kopi|coffee|cafe|starbucks|janji jiwa|kenangan)/.test(t))return'kopi';if(/(resto|restoran|warung|sate|bakso|mie |mcd|kfc|ayam goreng|padang)/.test(t))return'makan';if(/(apotek|apotik|klinik|rumah sakit|rs\.|farmasi|guardian|watsons)/.test(t))return'kesehatan';if(/(pln|listrik|pulsa|telkomsel|token|indihome|bpjs)/.test(t))return'tagihan';if(/(cinema|xxi|cgv|bioskop|netflix|spotify)/.test(t))return'hiburan';if(/(mart|supermarket|alfamart|indomaret|hypermart|lotte|transmart)/.test(t))return'belanja';return'';};
-const parseReceipt=text=>{
-    const lines=String(text).split('\n').map(l=>l.trim()).filter(Boolean);
-    let amount=0;
-    const totalRx=/(total|amount|jumlah|grand|bayar)[^\d]{0,20}([\d.,\s]+)/i;
-    for(const line of lines){
-        if(totalRx.test(line)){
-            const nums=line.replace(/rp\.?/gi,'').match(/[\d.,]+/g)||[];
-            const mx=Math.max(...nums.map(toNum),0);
-            if(mx>amount)amount=mx;
-        }
+
+// 1. Pembersihan Angka (Mengatasi salah baca titik/koma & huruf o/O)
+const toNum = n => {
+    n = String(n).replace(/rp\.?/gi, '').replace(/\s/g, '').replace(/[oO]/g, '0');
+    if (!n) return 0;
+    if (n.includes(',') && n.includes('.')) {
+        n = n.replace(/\./g, '').replace(',', '.');
+    } else if (n.includes(',')) {
+        if (/,\d{3}$/.test(n)) n = n.replace(/,/g, ''); 
+        else n = n.replace(',', '.'); 
+    } else {
+        n = n.replace(/\./g, '');
     }
-    if(!amount){
-        const nums=String(text).replace(/rp\.?/gi,'').match(/[\d.,]+/g)||[];
-        amount=Math.max(...nums.map(toNum),0);
-    }
-    const note=(lines.find(l=>l.length>3&&!/(cabang|alamat|telp|kota|npwp|gst|vat|no\.|nomor)/i.test(l))||'Scan struk').slice(0,40);
-    return{amount:Math.round(amount),date:normDate(text)||getToday(),note,category:guessCat(text)};
-};
-const fieldVal=f=>{if(!f)return null;if(f.value!==undefined&&f.value!==null)return f.value;if(f.data&&f.data.value!==undefined&&f.data.value!==null)return f.data.value;if(typeof f.data==='string'||typeof f.data==='number')return f.data;return null;};
-const runOcr=async(blob,provider,apiKey,onProg)=>{
-    if(provider!=='offline'&&apiKey&&navigator.onLine){
-        try{
-            const fd=new FormData();
-            if(provider==='taggun'){
-                onProg(10,'Mengirim ke Taggun...');
-                fd.append('file',blob,'struk.jpg');fd.append('incognito','true');
-                const r=await fetch('https://api.taggun.io/api/receipt/v1/scan',{method:'POST',headers:{apikey:apiKey},body:fd});
-                if(!r.ok)throw new Error('Taggun error '+r.status);
-                const j=await r.json();
-                const amount=fieldVal(j.totalAmount)||0;
-                const dt=normDate(fieldVal(j.date))||getToday();
-                const note=String(fieldVal(j.merchantName)||'Scan struk').slice(0,40);
-                return{amount:Math.round(amount),date:dt,note,category:guessCat(note)};
-            }
-            onProg(10,'Mengirim ke Mindee...');
-            fd.append('document',blob,'struk.jpg');
-            const r=await fetch('https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict',{method:'POST',headers:{Authorization:'Token '+apiKey},body:fd});
-            if(!r.ok)throw new Error('Mindee error '+r.status);
-            const j=await r.json();
-            const p=((((j.document||{}).inference||{}).prediction)||{});
-            const amount=fieldVal(p.total_amount)||0;
-            const dt=normDate(fieldVal(p.date))||getToday();
-            const note=String(fieldVal(p.supplier_name)||'Scan struk').slice(0,40);
-            return{amount:Math.round(amount),date:dt,note,category:guessCat(note+' '+JSON.stringify(p))};
-        }catch(e){onProg(null,(e&&e.message?e.message:'API gagal')+' — beralih ke OCR offline...');}
-    }
-    await ensureTesseract();
-    onProg(5,'Menyiapkan mesin OCR...');
-    const res=await Tesseract.recognize(blob,'ind+eng',{logger:m=>{
-        if(m.status==='recognizing text')onProg(10+Math.round(m.progress*85),'Membaca teks struk...');
-        else if(m.status)onProg(null,'OCR: '+m.status);
-    }});
-    return parseReceipt(res.data.text);
+    const v = parseFloat(n);
+    return isFinite(v) ? v : 0;
 };
 
-// POIN 5: Helper Haptic Feedback
+// 2. Mesin Penebak Kategori + Auto-Learn Memori
+const guessCat = (text, expCats, learnedKw = {}) => {
+    const t = String(text).toLowerCase();
+    
+    // A. Cek dari memori hasil belajar (Auto-Learn) terlebih dahulu
+    for (const [word, catId] of Object.entries(learnedKw)) {
+        if (t.includes(word)) return catId;
+    }
+
+    // B. Cek nama kategori persis
+    for (const cat of expCats) {
+        if (cat.type === 'expense' && t.includes(cat.name.toLowerCase())) return cat.id;
+    }
+    
+    // C. Pola statis bawaan
+    const kwMap = [
+        { rx: /(spbu|bensin|pertalite|pertamax|shell|parkir|\btol\b|gojek|grab|krl|mrt|angkot|ojol)/, key: 'transport' },
+        { rx: /(kopi|coffee|cafe|starbucks|janji jiwa|kenangan)/, key: 'kopi' },
+        { rx: /(resto|restoran|warung|sate|bakso|mie |mcd|kfc|ayam goreng|padang)/, key: 'makan' },
+        { rx: /(apotek|apotik|klinik|rumah sakit|rs\.|farmasi|guardian|watsons)/, key: 'kesehatan' },
+        { rx: /(pln|listrik|pulsa|telkomsel|token|indihome|bpjs)/, key: 'tagihan' },
+        { rx: /(cinema|xxi|cgv|bioskop|netflix|spotify|google play|ovo)/, key: 'hiburan' },
+        { rx: /(mart|supermarket|alfamart|indomaret|hypermart|lotte|transmart|grosir|buah)/, key: 'belanja' },
+        { rx: /(smk|sma|smp|sd|sekolah|spp|universitas|kampus|yayasan)/, key: 'pendidikan' }
+    ];
+    
+    for (const kw of kwMap) {
+        if (kw.rx.test(t)) {
+            const matched = expCats.find(c => c.type === 'expense' && (c.id === kw.key || c.name.toLowerCase().includes(kw.key)));
+            if (matched) return matched.id;
+        }
+    }
+    return '';
+};
+
+// 3. Ekstraksi Data Utama + Logika Validasi Matematika
+const parseReceipt = (text, expCats, learnedKw = {}) => {
+    const lines = String(text).split('\n').map(l => l.trim()).filter(Boolean);
+    let amount = 0;
+    
+    // A. Kumpulkan semua angka valid > 100 rupiah
+    const allNumbers = [];
+    const numRegex = /[\d.,]+/g;
+    for (const line of lines) {
+        const matches = line.replace(/rp\.?/gi, '').match(numRegex);
+        if (matches) {
+            matches.forEach(m => {
+                const val = toNum(m);
+                if (val > 100) allNumbers.push(val);
+            });
+        }
+    }
+    
+    // B. Cari relasi Matematika (Tunai - Kembali = Total Belanja)
+    let mathTotal = 0;
+    const sortedNums = [...new Set(allNumbers)].sort((a, b) => b - a);
+    for (let i = 0; i < sortedNums.length; i++) {
+        for (let j = i + 1; j < sortedNums.length; j++) {
+            const diff = sortedNums[i] - sortedNums[j];
+            if (diff > 0 && sortedNums.includes(diff)) {
+                mathTotal = Math.max(mathTotal, diff);
+            }
+        }
+    }
+    
+    // C. Fallback pencarian teks konvensional
+    let regexTotal = 0;
+    const totalRx = /(total|amount|jumlah|grand|bayar)[^\d]{0,20}([\d.,\s]+)/i;
+    for (const line of lines) {
+        if (totalRx.test(line)) {
+            const nums = line.replace(/rp\.?/gi, '').match(/[\d.,]+/g) || [];
+            const mx = Math.max(...nums.map(toNum), 0);
+            if (mx > regexTotal) regexTotal = mx;
+        }
+    }
+    
+    // D. Penentuan nilai akhir (Matematika diutamakan)
+    amount = mathTotal > 0 ? mathTotal : regexTotal;
+    if (!amount && sortedNums.length > 1) amount = sortedNums[1];
+    else if (!amount && sortedNums.length > 0) amount = sortedNums[0];
+
+    const note = (lines.find(l => l.length > 3 && !/(cabang|alamat|telp|kota|npwp|gst|vat|no\.|nomor)/i.test(l)) || 'Scan struk').slice(0, 40);
+    return { amount: Math.round(amount), date: normDate(text) || getToday(), note, category: guessCat(text, expCats, learnedKw) };
+};
+
+const fieldVal=f=>{if(!f)return null;if(f.value!==undefined&&f.value!==null)return f.value;if(f.data&&f.data.value!==undefined&&f.data.value!==null)return f.data.value;if(typeof f.data==='string'||typeof f.data==='number')return f.data;return null;};
+
+const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
+    if (provider !== 'offline' && apiKey && navigator.onLine) {
+        try {
+            const fd = new FormData();
+            if (provider === 'taggun') {
+                onProg(10, 'Mengirim ke Taggun...');
+                fd.append('file', blob, 'struk.jpg'); fd.append('incognito', 'true');
+                const r = await fetch('https://api.taggun.io/api/receipt/v1/scan', { method: 'POST', headers: { apikey: apiKey }, body: fd });
+                if (!r.ok) throw new Error('Taggun error ' + r.status);
+                const j = await r.json();
+                const amount = fieldVal(j.totalAmount) || 0;
+                const dt = normDate(fieldVal(j.date)) || getToday();
+                const note = String(fieldVal(j.merchantName) || 'Scan struk').slice(0, 40);
+                return { amount: Math.round(amount), date: dt, note, category: guessCat(note, expCats, learnedKw) };
+            }
+            onProg(10, 'Mengirim ke Mindee...');
+            fd.append('document', blob, 'struk.jpg');
+            const r = await fetch('https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict', { method: 'POST', headers: { Authorization: 'Token ' + apiKey }, body: fd });
+            if (!r.ok) throw new Error('Mindee error ' + r.status);
+            const j = await r.json();
+            const p = ((((j.document || {}).inference || {}).prediction) || {});
+            const amount = fieldVal(p.total_amount) || 0;
+            const dt = normDate(fieldVal(p.date)) || getToday();
+            const note = String(fieldVal(p.supplier_name) || 'Scan struk').slice(0, 40);
+            return { amount: Math.round(amount), date: dt, note, category: guessCat(note + ' ' + JSON.stringify(p), expCats, learnedKw) };
+        } catch (e) { onProg(null, (e && e.message ? e.message : 'API gagal') + ' — beralih ke OCR offline...'); }
+    }
+    
+    if (provider === 'offline' || !navigator.onLine) {
+        onProg(5, 'Mengunduh mesin OCR (~5MB)... Mohon tunggu.');
+    } else {
+        onProg(5, 'Menyiapkan mesin OCR...');
+    }
+    await ensureTesseract();
+    
+    const res = await Tesseract.recognize(blob, 'ind+eng', { logger: m => {
+        if (m.status === 'recognizing text') onProg(10 + Math.round(m.progress * 85), 'Membaca teks struk...');
+        else if (m.status) onProg(null, 'OCR: ' + m.status);
+    } });
+    return parseReceipt(res.data.text, expCats, learnedKw);
+};
+
 const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
 
 function useLS(k,v){
@@ -310,8 +393,7 @@ const DEF_BUDGETS=[
 ];
 
 function App(){
-    // POIN 3: Maintenance Mode Toggle
-    const MAINTENANCE_MODE = true; // Ubah ke true untuk mengaktifkan maintenance
+    const MAINTENANCE_MODE = true;
 
     if (MAINTENANCE_MODE) {
         return (
@@ -329,7 +411,6 @@ function App(){
     const[wallets,setWallets]=useLS('nh_w',DEF_WALLETS);
     const[txns,setTxns]=useLS('nh_tx',[]);
     const[budgets,setBudgets]=useLS('nh_bg',DEF_BUDGETS);
-    // POIN 4: State Wishlist DIHAPUS
     const[notes,setNotes]=useLS('nh_n',[]);
     const[todos,setTodos]=useLS('nh_td',[]);
     const[debts,setDebts]=useLS('nh_db',[]);
@@ -338,14 +419,11 @@ function App(){
     const[streak,setStreak]=useLS('nh_sk',{current:0,longest:0,lastDate:null,celebratedAt:[]});
     const[ocrProvider,setOcrProvider]=useLS('nh_ocrp','offline');
     const[ocrKey,setOcrKey]=useLS('nh_ocrk','');
+    // State baru untuk Auto-Learn Memori OCR
+    const[learnedKw,setLearnedKw]=useLS('nh_lkw',{});
     const[pageKey,setPageKey]=useState(0);
     
-    // POIN 2: State untuk mencegah race condition pada penghapusan
-    const [isDeleting, setIsDeleting] = useState(false);
-    // Undo Snackbar: penghapusan transaksi ditunda 3 detik
-    const undoTimer = useRef(null);
     const [undoTxn, setUndoTxn] = useState(null);
-    useEffect(() => () => clearTimeout(undoTimer.current), []);
 
     const allCats=useMemo(()=>[...expCats,...incCats],[expCats,incCats]);
     const getCat=id=>allCats.find(c=>c.id===id);
@@ -407,49 +485,55 @@ function App(){
         }
     };
 
-    // POIN 2: Mencegah duplikasi saat edit transaksi
     const saveTxn = (t) => {
         triggerHaptic();
         if (mData?.id) {
-            // Mode Edit: Update berdasarkan ID yang sama, jangan buat ID baru
             setTxns(p => p.map(tx => tx.id === mData.id ? { ...t, id: mData.id, createdAt: tx.createdAt } : tx));
         } else {
-            // Mode Tambah Baru
             addTxn(t);
         }
         closeM();
     };
 
-    // POIN 2 + Undo Snackbar: hapus ditunda 3 detik, pengguna bisa tekan Undo
     const delTxn = (id, callback) => {
-        if (isDeleting || !id) return;
+        if (!id) return;
         const t = txns.find(x => x.id === id);
         if (!t) return;
         triggerHaptic();
-        setIsDeleting(true);
+        
+        setTxns(p => p.filter(x => x.id !== id));
+        
+        if (t.type === 'transfer') {
+            setWallets(p => p.map(w => {
+                if (w.id === t.transferFrom) return { ...w, balance: w.balance + t.amount };
+                if (w.id === t.transferTo) return { ...w, balance: w.balance - t.amount };
+                return w;
+            }));
+        } else if (t.walletId) {
+            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? -t.amount : t.amount) } : w));
+        }
+        
         setUndoTxn({ txn: t });
         if (callback) callback();
-        clearTimeout(undoTimer.current);
-        undoTimer.current = setTimeout(() => {
-            if (t.type === 'transfer') {
-                setWallets(p => p.map(w => {
-                    if (w.id === t.transferFrom) return { ...w, balance: w.balance + t.amount };
-                    if (w.id === t.transferTo) return { ...w, balance: w.balance - t.amount };
-                    return w;
-                }));
-            } else if (t.walletId) {
-                setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? -t.amount : t.amount) } : w));
-            }
-            setTxns(p => p.filter(x => x.id !== id));
-            setUndoTxn(null);
-            setIsDeleting(false);
-        }, 3000);
     };
 
     const undoDelete = () => {
-        clearTimeout(undoTimer.current);
+        if (!undoTxn) return;
+        const t = undoTxn.txn;
+        
+        setTxns(p => [t, ...p]);
+        
+        if (t.type === 'transfer') {
+            setWallets(p => p.map(w => {
+                if (w.id === t.transferFrom) return { ...w, balance: w.balance - t.amount };
+                if (w.id === t.transferTo) return { ...w, balance: w.balance + t.amount };
+                return w;
+            }));
+        } else if (t.walletId) {
+            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? t.amount : -t.amount) } : w));
+        }
+        
         setUndoTxn(null);
-        setIsDeleting(false);
     };
 
     const addNote=n=>{triggerHaptic();setNotes(p=>[{...n,id:genId(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);};
@@ -510,14 +594,12 @@ function App(){
     return(
         <div className="pb-20 min-h-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
             <div className="px-4 pt-4 page-enter" key={pageKey}>
-                {/* POIN 1: Menambahkan prop wallets={wallets} ke komponen Dash */}
                 {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM}/>}
                 {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM}/>}
                 {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
                 {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats} streak={streak} openM={openM} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey}/>}
             </div>
             
-            {/* POIN 5: Glassmorphism pada Bottom Navigation */}
             <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
                 <div className="flex items-center justify-around">
                     <NB ic={<I.Home/>} lb="Home" ac={tab==='home'} fn={()=>{setTab('home');setPageKey(k=>k+1)}}/>
@@ -531,18 +613,17 @@ function App(){
             </nav>
             
             {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='scanReceipt'&&<SyncErrorBoundary close={closeM}><ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey}/></SyncErrorBoundary>}
+            {modal==='scanReceipt'&&<SyncErrorBoundary close={closeM}><ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw}/></SyncErrorBoundary>}
             {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
             {modal==='addNote'&&<NoteM close={closeM} save={mData?.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
             {modal==='addWallet'&&<WalletM close={closeM} save={w=>setWallets(p=>[...p,{...w,id:genId(),balance:0}])}/>}
             {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={setBudgets}/>}
-            {/* POIN 4: Modal Wishlist DIHAPUS */}
             {modal==='addDebt'&&<DebtM close={closeM} save={addDebt}/>}
-            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id, closeM)}} getCat={getCat} wallets={wallets} isDeleting={isDeleting}/>}
+            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id, closeM)}} getCat={getCat} wallets={wallets}/>}
             {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} save={mData==='expense'?setExpCats:setIncCats} type={mData}/>}
             {modal==='todoBudget'&&<TodoBudgetM close={closeM} todo={mData} completeWithExpense={completeTodoWithExpense} skipExpense={skipTodoExpense} wallets={wallets}/>}
             {modal==='p2pSync'&&<SyncErrorBoundary close={closeM}><P2PSync close={closeM}/></SyncErrorBoundary>}
-            {/* Undo Snackbar: muncul 3 detik sebelum penghapusan permanen */}
+            
             {undoTxn&&(
                 <div className="fixed bottom-24 left-0 right-0 max-w-md mx-auto px-4 z-50 pointer-events-none">
                     <div className="pointer-events-auto bg-dark-700/95 backdrop-blur border border-white/10 rounded-2xl p-3 flex items-center justify-between shadow-2xl modal-ct">
@@ -555,7 +636,6 @@ function App(){
     );
 }
 
-// Error Boundary: jika modul P2P/QR gagal dimuat, aplikasi tidak white-screen
 class SyncErrorBoundary extends React.Component {
     constructor(props){super(props);this.state={hasError:false};}
     static getDerivedStateFromError(){return{hasError:true};}
@@ -578,7 +658,6 @@ class SyncErrorBoundary extends React.Component {
     }
 }
 
-// Blok umpan balik besar saat kamera gagal diakses, dengan opsi tempel teks SDP manual
 function CamError({onBack,onPaste,pasteValue,setPaste}){
     return(
         <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 text-center space-y-3">
@@ -603,7 +682,6 @@ function CamError({onBack,onPaste,pasteValue,setPaste}){
 
 function NB({ic,lb,ac,fn}){return<button onClick={fn} className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all ${ac?'text-blue-400':'text-dark-400'}`}>{ic}<span className="text-[10px] mt-1 font-medium">{lb}</span></button>}
 
-// POIN 1: Komponen Dash sekarang menerima prop 'wallets'
 function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, todos, budgets, catSpend, streak, allCats, openM}){
     const now=new Date();const g=now.getHours()<12?'Selamat Pagi':now.getHours()<18?'Selamat Siang':'Selamat Malam';
     const dn=now.toLocaleDateString('id-ID',{weekday:'long'});
@@ -681,7 +759,6 @@ function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns
                 {todayTxns.length>0?(
                     <div className="space-y-2">{todayTxns.slice(0,3).map(t=>{
                         if(t.type==='transfer'){
-                            // POIN 1: wallets.find sekarang AMAN karena wallets bukan undefined
                             const fromW=wallets.find(w=>w.id===t.transferFrom);
                             const toW=wallets.find(w=>w.id===t.transferTo);
                             return(<div key={t.id} className="flex items-center gap-3 py-1"><div className="w-6 h-6 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400"><I.Transfer/></div><div className="flex-1 min-w-0"><p className="text-sm truncate">Transfer: {fromW?.name} → {toW?.name}</p></div><span className="text-sm font-semibold text-blue-400">{fmtC(t.amount)}</span></div>);
@@ -699,14 +776,12 @@ function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns
     );
 }
 
-// POIN 4: Prop wishlist dihapus dari FinMod
 function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,totalBal,allCats,getCat,setWallets,setBudgets,addDebt,togDebt,delDebt,delTxn,openM}){
     const[sub,setSub]=useState('overview');
     return(
         <div className="space-y-4">
             <div className="pt-2"><h1 className="text-2xl font-bold">Keuangan</h1><p className="text-dark-400 text-sm mt-1">Kelola keuanganmu dengan bijak</p></div>
             <div className="flex gap-1 bg-dark-700 rounded-xl p-1 overflow-x-auto sb-hide">
-                {/* POIN 4: Tab Wishlist DIHAPUS dari array */}
                 {[{id:'overview',l:'Ringkasan'},{id:'transactions',l:'Transaksi'},{id:'budget',l:'Budget'},{id:'debts',l:'Hutang'}].map(t=>(
                     <button key={t.id} onClick={()=>setSub(t.id)} className={`px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${sub===t.id?'bg-blue-600 text-white':'text-dark-400'}`}>{t.l}</button>
                 ))}
@@ -714,7 +789,6 @@ function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,tota
             {sub==='overview'&&<FinOverview wallets={wallets} mIncome={mIncome} mExpense={mExpense} totalBal={totalBal} catSpend={catSpend} allCats={allCats} txns={txns} openM={openM}/>}
             {sub==='transactions'&&<TxnList txns={txns} getCat={getCat} openM={openM} delTxn={delTxn} wallets={wallets}/>}
             {sub==='budget'&&<BudgetView budgets={budgets} catSpend={catSpend} allCats={allCats} openM={openM}/>}
-            {/* POIN 4: Render komponen Wishlist DIHAPUS */}
             {sub==='debts'&&<DebtView debts={debts} openM={openM} tog={togDebt} del={delDebt}/>}
         </div>
     );
@@ -820,8 +894,6 @@ function BudgetView({budgets,catSpend,allCats,openM}){
     );
 }
 
-// POIN 4: Komponen WishView DIHAPUS SEPENUHNYA
-
 function DebtView({debts,openM,tog,del}){
     const pending=debts.filter(d=>d.status==='pending');const paid=debts.filter(d=>d.status==='paid');
     const totalHutang=pending.filter(d=>d.dtype==='hutang').reduce((s,d)=>s+d.amount,0);
@@ -908,7 +980,6 @@ function TodoItem({ t, tog }) {
     );
 }
 
-// POIN 4: Prop 'wish' dihapus dari SetMod
 function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,expCats,incCats,setExpCats,setIncCats,streak,openM,ocrProvider,setOcrProvider,ocrKey,setOcrKey}){
     const[isInstalled,setIsInstalled]=useState(false);
     useEffect(()=>{if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone){setIsInstalled(true)}},[]);
@@ -916,7 +987,6 @@ function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,ex
         if(window.deferredPrompt){window.deferredPrompt.prompt();const{outcome}=await window.deferredPrompt.userChoice;window.deferredPrompt=null;}
         else{alert('Untuk menginstall: buka menu browser (titik tiga) → "Install App" atau "Add to Home Screen"');}
     };
-    // POIN 4: 'wish' dihapus dari objek export
     const exp=()=>{const d={wallets,txns,budgets,notes,todos,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
     const imp=()=>{const fi=document.getElementById('nhImportFile');if(fi)fi.click();};
     const onImpFile=e=>{
@@ -946,13 +1016,11 @@ function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,ex
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-dark-400">To-Do</span><span>{todos.length}</span></div>
-                {/* POIN 4: Statistik Wishlist DIHAPUS */}
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Streak Terpanjang</span><span>{streak.longest} hari</span></div>
             </div></div>
             
             <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
-                <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
                 <h3 className="font-semibold text-sm">Scan Struk (OCR)</h3>
                 <select value={ocrProvider} onChange={e=>setOcrProvider(e.target.value)}>
                     <option value="offline">Offline — Tesseract.js (gratis, tanpa internet)</option>
@@ -962,7 +1030,8 @@ function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,ex
                 {ocrProvider!=='offline'&&(<div className="space-y-2"><input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>{!navigator.onLine&&<p className="text-[10px] text-yellow-400">Kamu sedang offline — scan akan otomatis memakai OCR offline.</p>}</div>)}
                 <p className="text-[10px] text-dark-500">{ocrProvider==='offline'?'Model bahasa (~5 MB) diunduh sekali saat pertama dipakai, lalu tersimpan di perangkat.':'API key hanya disimpan di perangkatmu (localStorage) dan dikirim langsung ke provider. Jika API gagal atau kamu sedang offline, otomatis fallback ke OCR offline.'}</p>
             </div>
-            <h3 className="font-semibold text-sm">Data & Sinkronisasi</h3>
+            <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
+                <h3 className="font-semibold text-sm">Data & Sinkronisasi</h3>
                 <button onClick={() => openM('p2pSync')} className="w-full flex items-center gap-3 py-3 px-4 bg-blue-600/20 text-blue-400 rounded-xl text-sm ch border border-blue-500/30">
                     <I.Transfer />
                     <span>Sinkronisasi P2P (Tanpa Server)</span>
@@ -1091,22 +1160,19 @@ function BudgetM({close,budgets,expCats,save}){
     return(<MW close={close} title="Atur Budget"><div className="space-y-4"><p className="text-dark-400 text-xs">Atur limit, periode, dan kategori yang dipantau.</p>{local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};const trackedCats=b.categories||[b.category];return(<div key={b.id} className="bg-dark-700 rounded-xl p-3 space-y-3"><div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div><div><label className="text-[10px] text-dark-400 mb-1 block">Limit</label><input type="number" value={b.limit} onChange={e=>upd(b.id,'limit',e.target.value)} className="text-sm"/></div><div><label className="text-[10px] text-dark-400 mb-1 block">Periode</label><select value={b.period||'monthly'} onChange={e=>upd(b.id,'period',e.target.value)} className="text-sm"><option value="weekly">Mingguan</option><option value="monthly">Bulanan</option><option value="custom">Custom</option></select></div><div><label className="text-[10px] text-dark-400 mb-1 block">Kategori Dipantau</label><div className="flex flex-wrap gap-1.5">{expCats.map(ec=>(<button key={ec.id} type="button" onClick={()=>toggleCategory(b.id,ec.id)} className={`px-2 py-1 rounded text-[10px] transition-all ${trackedCats.includes(ec.id)?'bg-blue-500/30 text-blue-300 border border-blue-500/50':'bg-dark-600 text-dark-400 border border-transparent'}`}>{ec.name}</button>))}</div></div></div>)})}<button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></div></MW>);
 }
 
-// POIN 4: Komponen WishM DIHAPUS SEPENUHNYA
-
 function DebtM({close,save}){
     const[name,setName]=useState('');const[dtype,setDtype]=useState('hutang');const[amt,setAmt]=useState('');const[due,setDue]=useState('');const[note,setNote]=useState('');
     const sub=e=>{e.preventDefault();if(!name.trim()||!amt)return;save({name:name.trim(),dtype,amount:parseFloat(amt),dueDate:due||null,note:note.trim()});close()};
     return(<MW close={close} title="Tambah Hutang / Piutang"><form onSubmit={sub} className="space-y-4"><div className="flex gap-2 bg-dark-700 rounded-xl p-1"><button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang</button><button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang</button></div><div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
 }
 
-function TxnDetailM({txn,close,del,getCat,wallets,isDeleting}){
+function TxnDetailM({txn,close,del,getCat,wallets}){
     const cat=getCat(txn.category)||{name:txn.category,color:'#6b7280'};
     const fromW=wallets.find(w=>w.id===txn.transferFrom);
     const toW=wallets.find(w=>w.id===txn.transferTo);
     return(<MW close={close} title="Detail Transaksi"><div className="space-y-4">{txn.type==='transfer'?(<div className="text-center py-4"><div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 mx-auto"><I.Transfer/></div><p className="text-2xl font-bold mt-2 text-blue-400">{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">Transfer</p><p className="text-xs text-dark-500 mt-1">{fromW?.name} → {toW?.name}</p></div>):(<div className="text-center py-4"><CatBadge cat={cat} size="lg"/><p className={`text-2xl font-bold mt-2 ${txn.type==='income'?'text-green-400':'text-red-400'}`}>{txn.type==='income'?'+':'-'}{fmtC(txn.amount)}</p><p className="text-dark-400 text-sm mt-1">{cat.name}</p></div>)}<div className="bg-dark-700 rounded-xl p-4 space-y-3">{txn.note&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Catatan</span><span className="text-sm">{txn.note}</span></div>}<div className="flex justify-between"><span className="text-dark-400 text-sm">Tanggal</span><span className="text-sm">{fmtD(txn.date)}</span></div><div className="flex justify-between"><span className="text-dark-400 text-sm">Waktu</span><span className="text-sm">{fmtT(txn.createdAt)}</span></div>{txn.type!=='transfer'&&txn.isRecurring&&<div className="flex justify-between"><span className="text-dark-400 text-sm">Berulang</span><span className="text-sm text-blue-400 flex items-center gap-1"><I.Repeat/> Tanggal {txn.recurringDay}</span></div>}</div>
-    {/* POIN 2: Tombol hapus dinonaktifkan saat proses penghapusan berlangsung */}
-    <button onClick={del} disabled={isDeleting} className={`w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30 ${isDeleting ? 'opacity-50 cursor-not-allowed' : ''}`}>
-        {isDeleting ? 'Menghapus...' : 'Hapus Transaksi'}
+    <button onClick={del} className="w-full py-3 rounded-xl font-medium text-red-400 bg-red-500/10 border border-red-500/30">
+        Hapus Transaksi
     </button>
     </div></MW>);
 }
@@ -1306,7 +1372,6 @@ function P2PSync({ close }) {
             if (qr.getModuleCount() > 120) throw new Error('Data QR terlalu padat untuk dipindai');
             return <div className="flex justify-center my-4" dangerouslySetInnerHTML={{ __html: qr.createImgTag(4, 8) }} />;
         } catch (e) {
-            // Fallback manual: salin teks SDP terkompresi, kirim via aplikasi pesan
             const compressed = LZString.compressToEncodedURIComponent(raw);
             return (
                 <div className="my-4 space-y-2">
@@ -1376,7 +1441,7 @@ function P2PSync({ close }) {
     );
 }
 
-function ScanReceiptM({close,openM,expCats,ocrProvider,ocrKey}){
+function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw}){
     const[step,setStep]=useState('menu');
     const[prog,setProg]=useState(0);
     const[status,setStatus]=useState('');
@@ -1409,11 +1474,11 @@ function ScanReceiptM({close,openM,expCats,ocrProvider,ocrKey}){
         stopCam();setErr('');setStep('processing');setProg(0);
         setStatus(ocrProvider!=='offline'&&ocrKey&&navigator.onLine?'Mengirim gambar ke API OCR...':'Menyiapkan OCR offline...');
         try{
-            const r=await runOcr(blob,ocrProvider,ocrKey,(p,l)=>{if(p!==null)setProg(p);if(l)setStatus(l);});
+            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l)setStatus(l);});
             setAmt(String(r.amount||''));setNote(r.note||'');setDate(r.date||getToday());setCat(r.category||'');
             setStep('confirm');
         }catch(e){
-            setStep('menu');setErr('\u274c '+(e&&e.message?e.message:'OCR gagal. Coba foto lebih dekat & terang.'));
+            setStep('menu');setErr('❌ '+(e&&e.message?e.message:'OCR gagal. Coba foto lebih dekat & terang.'));
         }
     };
 
@@ -1426,13 +1491,25 @@ function ScanReceiptM({close,openM,expCats,ocrProvider,ocrKey}){
 
     const onFile=e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)process(f);};
 
-    const confirmGo=()=>{
-        const a=evalAmt(String(amt));
-        if(isNaN(a)||a<=0){setErr('Nominal tidak valid');return;}
-        const payload={type:'expense',amount:a,note:note.trim(),date:date||getToday()};
-        if(cat)payload.category=cat;
-        stopCam();close();
-        setTimeout(()=>openM('addTxn',payload),200);
+    // 4. Modifikasi fungsi confirmGo di dalam komponen <ScanReceiptM/>
+    const confirmGo = () => {
+        const a = evalAmt(String(amt));
+        if (isNaN(a) || a <= 0) { setErr('Nominal tidak valid'); return; }
+        
+        const finalNote = note.trim();
+        
+        // Proses Auto-Learn saat menyimpan form
+        if (finalNote && cat && typeof setLearnedKw === 'function') {
+            const keyword = finalNote.toLowerCase().split(' ').slice(0, 2).join(' ');
+            if (keyword.length > 3) {
+                setLearnedKw(prev => ({ ...prev, [keyword]: cat }));
+            }
+        }
+        
+        const payload = { type: 'expense', amount: a, note: finalNote, date: date || getToday() };
+        if (cat) payload.category = cat;
+        stopCam(); close();
+        setTimeout(() => openM('addTxn', payload), 200);
     };
 
     return(
@@ -1464,7 +1541,7 @@ function ScanReceiptM({close,openM,expCats,ocrProvider,ocrKey}){
                         <p className="text-xs text-dark-300 text-center">Posisikan bagian <b>TOTAL</b> & nama toko dalam kotak.<br/>Pastikan struk rata dan pencahayaan terang.</p>
                         <div className="flex gap-3">
                             <button onClick={()=>{stopCam();setStep('menu');}} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Kembali</button>
-                            <button onClick={capture} className="flex-1 py-3 rounded-xl font-semibold text-dark-900 bg-amber-400">\u{1F4F8} Ambil Foto</button>
+                            <button onClick={capture} className="flex-1 py-3 rounded-xl font-semibold text-dark-900 bg-amber-400">📸 Ambil Foto</button>
                         </div>
                     </div>
                 )}
@@ -1478,14 +1555,14 @@ function ScanReceiptM({close,openM,expCats,ocrProvider,ocrKey}){
                 )}
                 {step==='confirm'&&(
                     <div className="space-y-4">
-                        <p className="text-sm text-dark-300">Periksa hasil ekstraksi. <span className="text-amber-400">OCR bisa salah baca angka</span> (mis. 8 \u2192 B), pastikan nominal benar.</p>
+                        <p className="text-sm text-dark-300">Periksa hasil ekstraksi. <span className="text-amber-400">OCR bisa salah baca angka</span> (mis. 8 → B), pastikan nominal benar.</p>
                         <div><label className="text-xs text-dark-400 mb-1 block">Nominal (Rp)</label><input type="text" inputMode="decimal" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center"/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
                         <div><label className="text-xs text-dark-400 mb-1 block">Tanggal</label><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
                         <div><label className="text-xs text-dark-400 mb-1 block">Nama Toko / Catatan</label><input type="text" value={note} onChange={e=>setNote(e.target.value)}/></div>
                         <div><label className="text-xs text-dark-400 mb-2 block">Kategori (opsional)</label><div className="grid grid-cols-3 gap-2">{expCats.map(c=>(<button key={c.id} type="button" onClick={()=>setCat(cat===c.id?'':c.id)} className={`p-2.5 rounded-xl text-center transition-all ${cat===c.id?'bg-blue-500/20 border-2 border-blue-500':'bg-dark-700 border-2 border-transparent'}`}><CatBadge cat={c} size="sm"/><p className="text-[9px] mt-1 truncate">{c.name}</p></button>))}</div></div>
                         <div className="flex gap-3">
                             <button onClick={()=>{setErr('');setStep('menu');}} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Ulangi</button>
-                            <button onClick={confirmGo} className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600">Isi ke Form \u2713</button>
+                            <button onClick={confirmGo} className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600">Isi ke Form ✓</button>
                         </div>
                     </div>
                 )}
