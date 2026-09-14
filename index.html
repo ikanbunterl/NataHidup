@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="id" class="dark">
 <head>
@@ -13,9 +14,6 @@
     <link rel="apple-touch-icon" href="./icons/icon-192x192.png">
     <title>NataHidup</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -61,6 +59,7 @@
         .page-enter{animation:pageIn .25s ease-out}
         @keyframes pageIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
     </style>
+<base target="_blank">
 </head>
 <body class="min-h-screen max-w-md mx-auto relative">
 <div id="root"></div>
@@ -79,6 +78,7 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
 <script>
     if ('serviceWorker' in navigator) {
@@ -126,7 +126,6 @@ const getToday=()=>new Date().toISOString().split('T')[0];
 const getMY=()=>{const n=new Date();return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`};
 const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
 const evalAmt=s=>{try{if(!/[+\-*/]/.test(s))return parseFloat(s);if(!/^[\d+\-*/().\s]+$/.test(s)||!/\d/.test(s))return NaN;const r=Function('"use strict";return('+s+')')();return typeof r==='number'&&isFinite(r)?Math.round(r):NaN;}catch(e){return NaN;}};
-const mungeSdp=sdp=>{try{return sdp.split(/\r?\n/).filter(line=>{if(!line.startsWith('a=candidate'))return true;const p=line.split(' ');const addr=p[4]||'';return p[2]==='udp'&&addr!==''&&!addr.includes(':');}).join('\r\n');}catch(e){return sdp;}};
 
 const ensureTesseract=()=>new Promise((res,rej)=>{
     if(typeof Tesseract!=='undefined')return res();
@@ -284,10 +283,119 @@ const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
 
 const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
 
-function useLS(k,v){
+// ===== KONFIGURASI SUPABASE (Fase 1: backend & autentikasi) =====
+// Anon key memang bersifat publik; keamanan data dijaga Row Level Security (RLS) di database.
+const SUPABASE_URL='https://nvxvfbwvplkxqoetzwky.supabase.co';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im52eHZmYnd2cGxreHFvZXR6d2t5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyNDQ0NDEsImV4cCI6MjEwNDgyMDQ0MX0.Lii0Fe1sS5vqKEFvgi3lgb_ETGCCIKA2WaR6Nn7ZlSM';
+const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+
+const CAT_COLORS=['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'];
+
+// Pengaturan KHUSUS PERANGKAT (bukan data pengguna) tetap di localStorage:
+// pilihan provider OCR, API key OCR, memori kata kunci OCR, dan milestone streak yang sudah dirayakan.
+// Semua data pengguna (dompet, transaksi, budget, catatan, tugas, hutang, kategori) ada di Supabase.
+function usePref(k,v){
     const[s,set]=useState(()=>{try{const i=localStorage.getItem(k);return i?JSON.parse(i):v}catch{return v}});
     const sv=val=>{try{const x=val instanceof Function?val(s):val;set(x);localStorage.setItem(k,JSON.stringify(x))}catch{}};
     return[s,sv];
+}
+
+// ===== Pemetaan baris database (snake_case) <-> objek UI (camelCase) =====
+const rowToWallet=r=>({id:r.id,name:r.name,type:r.type,balance:Number(r.balance)||0});
+const rowToTxn=r=>({id:r.id,type:r.type,amount:Number(r.amount)||0,category:r.category||'',note:r.note||'',date:r.date,walletId:r.wallet_id||'',transferFrom:r.transfer_from||'',transferTo:r.transfer_to||'',isRecurring:!!r.is_recurring,recurringDay:(r.recurring_day===null||r.recurring_day===undefined)?null:r.recurring_day,recurringPid:r.recurring_pid||'',createdAt:r.created_at});
+const txnToRow=t=>({type:t.type,amount:t.amount,category:t.category||null,note:t.note||null,date:t.date||getToday(),wallet_id:t.walletId||null,transfer_from:t.transferFrom||null,transfer_to:t.transferTo||null,is_recurring:!!t.isRecurring,recurring_day:t.isRecurring?(t.recurringDay||null):null,recurring_pid:t.recurringPid||null});
+const rowToCat=r=>({id:r.code,dbId:r.id,name:r.name,color:r.color,type:r.type});
+const rowToBudget=r=>({id:r.id,category:r.category,categories:(r.categories&&r.categories.length)?r.categories:[r.category],limit:Number(r.amount_limit)||0,period:r.period||'monthly'});
+const rowToNote=r=>({id:r.id,title:r.title||'',content:r.content||'',tags:r.tags||[],pinned:!!r.pinned,createdAt:r.created_at,updatedAt:r.updated_at||r.created_at});
+const rowToTodo=r=>({id:r.id,title:r.title,completed:!!r.completed,deadline:r.deadline||null,budget:Number(r.budget)||0,createdAt:r.created_at});
+const rowToDebt=r=>({id:r.id,name:r.name,dtype:r.dtype||'hutang',amount:Number(r.amount)||0,dueDate:r.due_date||null,note:r.note||'',status:r.status||'pending',createdAt:r.created_at});
+
+// Delta saldo dompet yang dihasilkan sebuah transaksi
+const txnDelta=t=>{
+    const d={};
+    if(t.type==='transfer'){
+        if(t.transferFrom)d[t.transferFrom]=-t.amount;
+        if(t.transferTo)d[t.transferTo]=(d[t.transferTo]||0)+t.amount;
+    }else if(t.walletId){
+        d[t.walletId]=(t.type==='income'?1:-1)*t.amount;
+    }
+    return d;
+};
+const flipDelta=d=>{const o={};Object.keys(d||{}).forEach(k=>{o[k]=-d[k]});return o;};
+const mergeDelta=(a,b)=>{const o={...(a||{})};Object.keys(b||{}).forEach(k=>{o[k]=(o[k]||0)+b[k]});return o;};
+const errMsg=e=>{
+    const m=String((e&&(e.message||e))||'Terjadi kesalahan');
+    if(/failed to fetch|fetch failed|networkerror|network request|load failed|timeout|econnrefused/i.test(m))return 'Tidak ada koneksi internet. Periksa jaringanmu, lalu coba lagi.';
+    return m;
+};
+
+// ===== Cek kelengkapan skema database (Fase 1 + SQL suplemen Fase 2) =====
+async function checkSchema(){
+    const probes=await Promise.all([
+        sb.from('categories').select('code').limit(1),
+        sb.from('transactions').select('recurring_pid').limit(1),
+        sb.from('budgets').select('id').limit(1),
+        sb.from('notes').select('id').limit(1),
+        sb.from('todos').select('id').limit(1),
+        sb.from('debts').select('id').limit(1),
+    ]);
+    const labels=['kolom categories.code','kolom transactions.recurring_pid','tabel budgets','tabel notes','tabel todos','tabel debts'];
+    return probes.map((p,i)=>p.error?labels[i]:null).filter(Boolean);
+}
+
+// ===== Sinkronisasi awal (Read): unduh semua data dari server + seed default =====
+async function loadAllData(uid){
+    const [wR,cR,tR]=await Promise.all([
+        sb.from('wallets').select('*').eq('user_id',uid).order('created_at',{ascending:true}),
+        sb.from('categories').select('*').eq('user_id',uid).order('created_at',{ascending:true}),
+        sb.from('transactions').select('*').eq('user_id',uid).eq('is_deleted',false).order('date',{ascending:false}).order('created_at',{ascending:false}),
+    ]);
+    if(wR.error)throw wR.error;
+    if(cR.error)throw cR.error;
+    if(tR.error)throw tR.error;
+    const [bgR,nR,tdR,dbR]=await Promise.all([
+        sb.from('budgets').select('*').eq('user_id',uid),
+        sb.from('notes').select('*').eq('user_id',uid).order('updated_at',{ascending:false}),
+        sb.from('todos').select('*').eq('user_id',uid).order('created_at',{ascending:false}),
+        sb.from('debts').select('*').eq('user_id',uid).order('created_at',{ascending:false}),
+    ]);
+    if(bgR.error)throw bgR.error;
+    if(nR.error)throw nR.error;
+    if(tdR.error)throw tdR.error;
+    if(dbR.error)throw dbR.error;
+
+    // Seed data default untuk akun yang masih kosong
+    let cats=cR.data.filter(r=>r.code).map(rowToCat);
+    if(!cR.data.length){
+        const seed=[...DEF_EXP_CAT,...DEF_INC_CAT].map(c=>({user_id:uid,name:c.name,color:c.color,type:c.type,code:c.id}));
+        const {data,error}=await sb.from('categories').insert(seed).select();
+        if(error)throw error;
+        cats=data.map(rowToCat);
+    }
+    let wallets=wR.data.map(rowToWallet);
+    if(!wR.data.length){
+        const seed=DEF_WALLETS.map(w=>({user_id:uid,name:w.name,type:w.type,balance:0}));
+        const {data,error}=await sb.from('wallets').insert(seed).select();
+        if(error)throw error;
+        wallets=data.map(rowToWallet);
+    }
+    let budgets=bgR.data.map(rowToBudget);
+    if(!bgR.data.length){
+        const seed=DEF_BUDGETS.map(b=>({user_id:uid,category:b.category,categories:b.categories,amount_limit:b.limit,period:b.period}));
+        const {data,error}=await sb.from('budgets').insert(seed).select();
+        if(error)throw error;
+        budgets=data.map(rowToBudget);
+    }
+    return {
+        wallets,
+        txns:tR.data.map(rowToTxn),
+        budgets,
+        notes:nR.data.map(rowToNote),
+        todos:tdR.data.map(rowToTodo),
+        debts:dbR.data.map(rowToDebt),
+        expCats:cats.filter(c=>c.type==='expense'),
+        incCats:cats.filter(c=>c.type==='income'),
+    };
 }
 
 function fireConfetti(){
@@ -392,44 +500,224 @@ const DEF_BUDGETS=[
     {id:'b3',category:'hiburan',limit:300000,period:'monthly',categories:['hiburan']},
 ];
 
-function App(){
-    const MAINTENANCE_MODE = true;
+// ===== Fase 3: Splash, Toast (penanganan error jaringan), dan Root =====
+function Splash({text}){
+    return(
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+            <div className="w-12 h-12 border-4 border-dark-600 border-t-blue-500 rounded-full animate-spin"/>
+            <p className="text-dark-400 text-sm">{text||'Memuat NataHidup...'}</p>
+        </div>
+    );
+}
 
-    if (MAINTENANCE_MODE) {
-        return (
-            <div className="min-h-screen bg-dark-900 flex flex-col items-center justify-center p-6 text-center">
-                <div className="w-20 h-20 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 mb-6">
-                    <I.Gear />
+function Toasts({toasts}){
+    if(!toasts.length)return null;
+    return(
+        <div className="fixed top-3 left-0 right-0 max-w-md mx-auto px-4 z-[70] space-y-2 pointer-events-none">
+            {toasts.map(t=>(
+                <div key={t.id} className={`pointer-events-auto rounded-xl px-4 py-3 text-sm shadow-2xl border modal-ct flex items-start gap-2 ${t.type==='ok'?'bg-green-600/25 border-green-500/40 text-green-300':t.type==='info'?'bg-blue-600/25 border-blue-500/40 text-blue-300':'bg-red-600/25 border-red-500/40 text-red-300'}`}>
+                    <span className="shrink-0">{t.type==='ok'?'✅':'⚠️'}</span>
+                    <span className="flex-1 break-words">{t.msg}</span>
                 </div>
-                <h1 className="text-2xl font-bold text-white mb-2">Sedang Maintenance 🛠️</h1>
-                <p className="text-dark-400 text-sm">Aplikasi sedang diperbarui oleh developer. Silakan kembali lagi nanti!</p>
-            </div>
-        );
-    }
+            ))}
+        </div>
+    );
+}
 
+function Root(){
+    const[session,setSession]=useState(null);
+    const[authReady,setAuthReady]=useState(false);
+    const[toasts,setToasts]=useState([]);
+    const toast=useCallback((msg,type='error')=>{
+        const id=genId();
+        setToasts(p=>[...p,{id,msg,type}].slice(-3));
+        setTimeout(()=>setToasts(p=>p.filter(x=>x.id!==id)),4500);
+    },[]);
+    useEffect(()=>{
+        let mounted=true;
+        sb.auth.getSession().then(({data})=>{if(mounted){setSession(data.session);setAuthReady(true);}}).catch(()=>{if(mounted)setAuthReady(true);});
+        const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>{if(mounted){setSession(s);setAuthReady(true);}});
+        return()=>{mounted=false;try{sub.subscription.unsubscribe();}catch(e){}};
+    },[]);
+    if(!authReady)return(<div className="min-h-screen"><Splash/><Toasts toasts={toasts}/></div>);
+    return(
+        <div className="min-h-screen">
+            {session?<App key={session.user.id} user={session.user} toast={toast}/>:<AuthScreen toast={toast}/>}
+            <Toasts toasts={toasts}/>
+        </div>
+    );
+}
+
+// ===== Layar Autentikasi (Fase 1: Login / Register sebelum dashboard) =====
+const AUTH_ERR_MAP={
+    'Invalid login credentials':'Email atau password salah.',
+    'Email not confirmed':'Email belum dikonfirmasi. Cek inbox/spam kamu, lalu coba lagi.',
+    'User already registered':'Email sudah terdaftar. Silakan masuk.',
+    'Password should be at least 6 characters.':'Password minimal 6 karakter.',
+    'Unable to validate email address: invalid format':'Format email tidak valid.',
+    'For security purposes, you can only request this after 60 seconds.':'Tunggu sebentar sebelum meminta ulang.',
+    'Email rate limit exceeded':'Terlalu banyak percobaan. Coba lagi beberapa menit.',
+};
+const authErr=m=>AUTH_ERR_MAP[m]||m;
+
+function AuthScreen({toast}){
+    const[mode,setMode]=useState('login'); // login | register | forgot
+    const[email,setEmail]=useState('');
+    const[pw,setPw]=useState('');
+    const[pw2,setPw2]=useState('');
+    const[busy,setBusy]=useState(false);
+    const[err,setErr]=useState('');
+    const[info,setInfo]=useState('');
+    const switchMode=m=>{setMode(m);setErr('');setInfo('');setPw('');setPw2('');};
+    const login=async e=>{
+        e.preventDefault();if(busy)return;
+        setBusy(true);setErr('');setInfo('');
+        const {error}=await sb.auth.signInWithPassword({email:email.trim(),password:pw});
+        setBusy(false);
+        if(error)setErr(authErr(error.message));
+    };
+    const register=async e=>{
+        e.preventDefault();if(busy)return;
+        if(pw.length<6){setErr('Password minimal 6 karakter.');return;}
+        if(pw!==pw2){setErr('Konfirmasi password tidak cocok.');return;}
+        setBusy(true);setErr('');setInfo('');
+        const {data,error}=await sb.auth.signUp({email:email.trim(),password:pw});
+        setBusy(false);
+        if(error){setErr(authErr(error.message));return;}
+        if(!(data&&data.session))setInfo('Pendaftaran berhasil! Cek email kamu (termasuk folder spam) untuk konfirmasi akun, lalu masuk kembali.');
+    };
+    const resend=async()=>{
+        if(!email.trim()){setErr('Isi email kamu dulu.');return;}
+        const {error}=await sb.auth.resend({type:'signup',email:email.trim()});
+        if(error){setErr(authErr(error.message));return;}
+        setInfo('Email konfirmasi dikirim ulang. Cek inbox/spam kamu.');
+    };
+    const reset=async e=>{
+        e.preventDefault();if(busy)return;
+        if(!email.trim()){setErr('Isi email kamu dulu.');return;}
+        setBusy(true);setErr('');setInfo('');
+        const {error}=await sb.auth.resetPasswordForEmail(email.trim(),{redirectTo:window.location.href});
+        setBusy(false);
+        if(error){setErr(authErr(error.message));return;}
+        setInfo('Link reset password sudah dikirim ke email kamu.');
+    };
+    return(
+        <div className="min-h-screen flex flex-col items-center justify-center p-6">
+            <div className="w-full max-w-sm">
+                <div className="text-center mb-8">
+                    <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center text-3xl shadow-lg shadow-blue-600/30 mb-4">🌱</div>
+                    <h1 className="text-2xl font-bold">NataHidup</h1>
+                    <p className="text-dark-400 text-sm mt-1">Produktivitas & keuangan pribadi, tersinkron di cloud</p>
+                </div>
+                <div className="bg-dark-800 rounded-2xl p-5 border border-dark-700">
+                    {mode!=='forgot'&&(
+                        <div className="flex gap-1 bg-dark-700 rounded-xl p-1 mb-5">
+                            <button onClick={()=>switchMode('login')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode==='login'?'bg-blue-600 text-white':'text-dark-400'}`}>Masuk</button>
+                            <button onClick={()=>switchMode('register')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode==='register'?'bg-blue-600 text-white':'text-dark-400'}`}>Daftar</button>
+                        </div>
+                    )}
+                    {err!==''&&<div className="bg-red-500/10 border border-red-500/30 text-red-300 text-xs rounded-xl p-3 mb-4">{err}</div>}
+                    {info!==''&&<div className="bg-green-500/10 border border-green-500/30 text-green-300 text-xs rounded-xl p-3 mb-4">{info}</div>}
+                    {mode==='login'&&(
+                        <form onSubmit={login} className="space-y-3">
+                            <input type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email" required/>
+                            <input type="password" placeholder="Password" value={pw} onChange={e=>setPw(e.target.value)} autoComplete="current-password" required/>
+                            <button type="submit" disabled={busy} className={`w-full py-3 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Memproses...':'Masuk'}</button>
+                            <div className="flex justify-between text-xs pt-1">
+                                <button type="button" onClick={()=>switchMode('forgot')} className="text-dark-400 hover:text-blue-400">Lupa password?</button>
+                                <button type="button" onClick={resend} className="text-dark-400 hover:text-blue-400">Kirim ulang email konfirmasi</button>
+                            </div>
+                        </form>
+                    )}
+                    {mode==='register'&&(
+                        <form onSubmit={register} className="space-y-3">
+                            <input type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email" required/>
+                            <input type="password" placeholder="Password (min. 6 karakter)" value={pw} onChange={e=>setPw(e.target.value)} autoComplete="new-password" required/>
+                            <input type="password" placeholder="Ulangi password" value={pw2} onChange={e=>setPw2(e.target.value)} autoComplete="new-password" required/>
+                            <button type="submit" disabled={busy} className={`w-full py-3 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Memproses...':'Buat Akun'}</button>
+                            <p className="text-[10px] text-dark-500 text-center">Data kamu tersimpan di cloud Supabase dan bisa diakses dari perangkat mana pun dengan akun ini.</p>
+                        </form>
+                    )}
+                    {mode==='forgot'&&(
+                        <form onSubmit={reset} className="space-y-3">
+                            <p className="text-xs text-dark-400 mb-2">Masukkan email akunmu. Kami kirimkan link untuk mengatur password baru.</p>
+                            <input type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="email" required/>
+                            <button type="submit" disabled={busy} className={`w-full py-3 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Memproses...':'Kirim Link Reset'}</button>
+                            <button type="button" onClick={()=>switchMode('login')} className="w-full py-2 rounded-xl bg-dark-700 text-sm text-dark-300">Kembali ke Login</button>
+                        </form>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ===== Fase 3: skeleton loading =====
+function DashSkel(){
+    return(
+        <div className="space-y-5">
+            <div className="h-12 bg-dark-700 rounded-xl animate-pulse"/>
+            <div className="h-36 bg-dark-700 rounded-2xl animate-pulse"/>
+            <div className="h-24 bg-dark-700 rounded-2xl animate-pulse"/>
+            <div className="h-44 bg-dark-700 rounded-2xl animate-pulse"/>
+        </div>
+    );
+}
+
+function App({user,toast}){
     const[tab,setTab]=useState('home');const[modal,setModal]=useState(null);const[mData,setMData]=useState(null);
-    const[wallets,setWallets]=useLS('nh_w',DEF_WALLETS);
-    const[txns,setTxns]=useLS('nh_tx',[]);
-    const[budgets,setBudgets]=useLS('nh_bg',DEF_BUDGETS);
-    const[notes,setNotes]=useLS('nh_n',[]);
-    const[todos,setTodos]=useLS('nh_td',[]);
-    const[debts,setDebts]=useLS('nh_db',[]);
-    const[expCats,setExpCats]=useLS('nh_ec',DEF_EXP_CAT);
-    const[incCats,setIncCats]=useLS('nh_ic',DEF_INC_CAT);
-    const[streak,setStreak]=useLS('nh_sk',{current:0,longest:0,lastDate:null,celebratedAt:[]});
-    const[ocrProvider,setOcrProvider]=useLS('nh_ocrp','offline');
-    const[ocrKey,setOcrKey]=useLS('nh_ocrk','');
-    // State baru untuk Auto-Learn Memori OCR
-    const[learnedKw,setLearnedKw]=useLS('nh_lkw',{});
+    // ===== Fase 2: state data diisi dari server (bukan localStorage) =====
+    const[wallets,setWallets]=useState([]);
+    const[txns,setTxns]=useState([]);
+    const[budgets,setBudgets]=useState([]);
+    const[notes,setNotes]=useState([]);
+    const[todos,setTodos]=useState([]);
+    const[debts,setDebts]=useState([]);
+    const[expCats,setExpCats]=useState([]);
+    const[incCats,setIncCats]=useState([]);
+    const[loading,setLoading]=useState(true);
+    const[bootError,setBootError]=useState('');
+    const[online,setOnline]=useState(typeof navigator==='undefined'||navigator.onLine!==false);
+    const[undoTxn,setUndoTxn]=useState(null);
+    // Pengaturan khusus perangkat (bukan data pengguna)
+    const[ocrProvider,setOcrProvider]=usePref('nh_ocrp','offline');
+    const[ocrKey,setOcrKey]=usePref('nh_ocrk','');
+    const[learnedKw,setLearnedKw]=usePref('nh_lkw',{});
+    const[celebratedAt,setCelebratedAt]=usePref('nh_celebrated',[]);
     const[pageKey,setPageKey]=useState(0);
-    
-    const [undoTxn, setUndoTxn] = useState(null);
+
+    const walletsRef=useRef([]);walletsRef.current=wallets;
+    const recRef=useRef(false);
+
+    useEffect(()=>{
+        const up=()=>setOnline(true),dn=()=>setOnline(false);
+        window.addEventListener('online',up);window.addEventListener('offline',dn);
+        return()=>{window.removeEventListener('online',up);window.removeEventListener('offline',dn)};
+    },[]);
+
+    // ===== Fase 2: sinkronisasi awal (Read) — fetch ke API saat App dimuat =====
+    const boot=useCallback(async()=>{
+        setLoading(true);setBootError('');
+        try{
+            const missing=await checkSchema();
+            if(missing.length)throw new Error('Skema database belum lengkap ('+missing.join(', ')+'). Jalankan SQL/suplemen_fase2.sql di Supabase SQL Editor, lalu muat ulang.');
+            const d=await loadAllData(user.id);
+            setWallets(d.wallets);setTxns(d.txns);setBudgets(d.budgets);
+            setNotes(d.notes);setTodos(d.todos);setDebts(d.debts);
+            setExpCats(d.expCats);setIncCats(d.incCats);
+        }catch(e){
+            setBootError(errMsg(e));
+        }finally{
+            setLoading(false);
+        }
+    },[user.id]);
+    useEffect(()=>{boot()},[boot]);
 
     const allCats=useMemo(()=>[...expCats,...incCats],[expCats,incCats]);
     const getCat=id=>allCats.find(c=>c.id===id);
     const totalBal=useMemo(()=>wallets.reduce((s,w)=>s+w.balance,0),[wallets]);
-    
-    const mTxns=useMemo(()=>txns.filter(t=>t.date.startsWith(getMY())&&t.type!=='transfer'),[txns]);
+
+    const mTxns=useMemo(()=>txns.filter(t=>t.date&&t.date.startsWith(getMY())&&t.type!=='transfer'),[txns]);
     const mIncome=useMemo(()=>mTxns.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0),[mTxns]);
     const mExpense=useMemo(()=>mTxns.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0),[mTxns]);
     const todayTxns=useMemo(()=>txns.filter(t=>t.date===getToday()),[txns]);
@@ -437,148 +725,293 @@ function App(){
     const catSpend=useMemo(()=>{const s={};mTxns.filter(t=>t.type==='expense').forEach(t=>{s[t.category]=(s[t.category]||0)+t.amount});return s},[mTxns]);
     const remain=mIncome-mExpense;
 
-    useEffect(()=>{
-        const today=getToday();if(streak.lastDate===today)return;
-        const yd=new Date();yd.setDate(yd.getDate()-1);const ydStr=yd.toISOString().split('T')[0];
-        const ydExp=txns.filter(t=>t.date===ydStr&&t.type==='expense').reduce((s,t)=>s+t.amount,0);
+    // ===== Streak kini dihitung (derived) dari data transaksi server =====
+    const streak=useMemo(()=>{
+        if(loading||!txns.length)return{current:0,longest:0};
+        const dates=txns.map(t=>t.date).filter(Boolean).sort();
+        const first=dates[0];
+        const yStr=new Date(Date.now()-864e5).toISOString().split('T')[0];
+        if(!first||yStr<first)return{current:0,longest:0};
         const now=new Date();const dim=daysInMonth(now.getFullYear(),now.getMonth()+1);
-        const totalBudget=budgets.reduce((s,b)=>s+b.limit,0);const dailyLim=totalBudget/dim;
-        const yesterdayWasYesterday=streak.lastDate===ydStr;
-        let nc=streak.current;
-        if(yesterdayWasYesterday||!streak.lastDate){
-            if(ydExp<=dailyLim){nc=streak.current+1}
-            else if(ydExp>dailyLim){nc=0}
-        }else{nc=0}
-        const nl=Math.max(streak.longest,nc);
-        const celebrated=[...(streak.celebratedAt||[])];
-        const milestones=[7,14,30,50,100,200,365];
-        if(nc>0&&milestones.includes(nc)&&!celebrated.includes(nc)){
-            celebrated.push(nc);
-            setTimeout(()=>fireConfetti(),500);
+        const dailyLim=budgets.reduce((s,b)=>s+(b.limit||0),0)/dim;
+        const expByDay={};
+        txns.forEach(t=>{if(t.type==='expense'&&t.date)expByDay[t.date]=(expByDay[t.date]||0)+t.amount;});
+        const ok=ds=>(expByDay[ds]||0)<=dailyLim;
+        let cur=0;
+        for(let ms=Date.parse(yStr+'T00:00:00Z');;ms-=864e5){
+            const ds=new Date(ms).toISOString().split('T')[0];
+            if(ds<first)break;
+            if(ok(ds))cur++;else break;
         }
-        setStreak({current:nc,longest:nl,lastDate:today,celebratedAt:celebrated});
-    },[]);
+        let longest=0,run=0;
+        for(let ms=Date.parse(first+'T00:00:00Z');ms<=Date.parse(yStr+'T00:00:00Z');ms+=864e5){
+            const ds=new Date(ms).toISOString().split('T')[0];
+            if(ok(ds)){run++;if(run>longest)longest=run;}else run=0;
+        }
+        return{current:cur,longest:Math.max(longest,cur)};
+    },[txns,budgets,loading]);
+
+    // Rayakan milestone streak (sekali per perangkat per milestone)
+    useEffect(()=>{
+        const sc=streak.current;const ms=[7,14,30,50,100,200,365];
+        if(!sc||!ms.includes(sc)||celebratedAt.includes(sc))return;
+        setCelebratedAt(p=>[...p,sc]);
+        setTimeout(()=>fireConfetti(),500);
+    },[streak.current]);
+
+    // ===== Saldo dompet: hitung delta -> simpan ke server -> perbarui UI =====
+    const applyWalletDelta=async delta=>{
+        const entries=Object.entries(delta||{}).filter(([,v])=>v!==0);
+        if(!entries.length)return;
+        await Promise.all(entries.map(async([wid,d])=>{
+            const w=walletsRef.current.find(x=>x.id===wid);
+            if(!w)return;
+            const nb=Math.round(w.balance+d);
+            const {error}=await sb.from('wallets').update({balance:nb}).eq('id',wid);
+            if(error)toast('Saldo dompet "'+w.name+'" gagal diperbarui: '+errMsg(error));
+            else setWallets(p=>p.map(x=>x.id===wid?{...x,balance:nb}:x));
+        }));
+    };
+
+    // ===== Transaksi berulang: buat transaksi anak di server tiap bulan =====
+    useEffect(()=>{
+        if(loading||recRef.current)return;
+        recRef.current=true;
+        (async()=>{
+            const my=getMY();const dayNum=new Date().getDate();
+            const templates=txns.filter(t=>t.isRecurring&&t.recurringDay);
+            for(const r of templates){
+                try{
+                    const exists=txns.some(t=>t.recurringPid===r.id&&t.date&&t.date.startsWith(my));
+                    if(exists||dayNum<r.recurringDay)continue;
+                    const payload=txnToRow({...r,isRecurring:false,recurringPid:r.id,date:`${my}-${String(r.recurringDay).padStart(2,'0')}`});
+                    payload.user_id=user.id;
+                    const {data,error}=await sb.from('transactions').insert(payload).select().single();
+                    if(error)throw error;
+                    const nt=rowToTxn(data);
+                    setTxns(p=>[nt,...p]);
+                    await applyWalletDelta(txnDelta(nt));
+                }catch(e){toast('Transaksi berulang gagal dibuat: '+errMsg(e));}
+            }
+        })();
+    },[loading]);
+
+    // ===== Fase 2: mutasi (Create/Update/Delete) — request ke server dulu, UI menyusul =====
+    const addTxn=async t=>{
+        triggerHaptic();
+        try{
+            const payload=txnToRow(t);payload.user_id=user.id;
+            const {data,error}=await sb.from('transactions').insert(payload).select().single();
+            if(error)throw error;
+            const nt=rowToTxn(data);
+            setTxns(p=>[nt,...p]);
+            await applyWalletDelta(txnDelta(nt));
+            return true;
+        }catch(e){toast('Gagal menyimpan transaksi: '+errMsg(e));return false;}
+    };
+
+    const saveTxn=async t=>{
+        triggerHaptic();
+        if(mData&&mData.id){
+            try{
+                const old=txns.find(x=>x.id===mData.id);
+                const payload=txnToRow(t);
+                const {data,error}=await sb.from('transactions').update(payload).eq('id',mData.id).select().single();
+                if(error)throw error;
+                const nt=rowToTxn(data);
+                setTxns(p=>p.map(x=>x.id===nt.id?{...nt,createdAt:x.createdAt}:x));
+                if(old)await applyWalletDelta(mergeDelta(flipDelta(txnDelta(old)),txnDelta(nt)));
+                return true;
+            }catch(e){toast('Gagal memperbarui transaksi: '+errMsg(e));return false;}
+        }
+        return await addTxn(t);
+    };
+
+    // Fase 3: hapus transaksi = soft delete di server (kolom is_deleted) + jendela Undo
+    const delTxn=async(id,callback)=>{
+        if(!id)return;
+        const t=txns.find(x=>x.id===id);
+        if(!t)return;
+        triggerHaptic();
+        try{
+            const {error}=await sb.from('transactions').update({is_deleted:true}).eq('id',id);
+            if(error)throw error;
+            setTxns(p=>p.filter(x=>x.id!==id));
+            await applyWalletDelta(flipDelta(txnDelta(t)));
+            setUndoTxn({txn:t});
+            if(callback)callback();
+        }catch(e){toast('Gagal menghapus transaksi: '+errMsg(e));}
+    };
 
     useEffect(()=>{
-        const recurring=txns.filter(t=>t.isRecurring);const my=getMY();
-        recurring.forEach(r=>{
-            const exists=txns.some(t=>t.recurringPid===r.id&&t.date.startsWith(my));
-            if(!exists&&new Date().getDate()>=r.recurringDay){
-                const nt={...r,id:genId(),recurringPid:r.id,date:`${my}-${String(r.recurringDay).padStart(2,'0')}`,createdAt:new Date().toISOString(),isRecurring:false};
-                setTxns(p=>[nt,...p]);
-                if(r.walletId)setWallets(p=>p.map(w=>w.id===r.walletId?{...w,balance:w.balance+(r.type==='income'?r.amount:-r.amount)}:w));
-            }
-        });
-    },[]);
+        if(!undoTxn)return;
+        const tm=setTimeout(()=>setUndoTxn(null),6000);
+        return()=>clearTimeout(tm);
+    },[undoTxn]);
 
-    const addTxn=t=>{
-        const n={...t,id:genId(),date:t.date||getToday(),createdAt:new Date().toISOString()};
-        setTxns(p=>[n,...p]);
-        if(t.type==='transfer'){
-            setWallets(p=>p.map(w=>{
-                if(w.id===t.transferFrom) return {...w, balance: w.balance - t.amount};
-                if(w.id===t.transferTo) return {...w, balance: w.balance + t.amount};
-                return w;
-            }));
-        }else if(t.walletId){
-            setWallets(p=>p.map(w=>w.id===t.walletId?{...w,balance:w.balance+(t.type==='income'?t.amount:-t.amount)}:w));
-        }
-    };
-
-    const saveTxn = (t) => {
-        triggerHaptic();
-        if (mData?.id) {
-            setTxns(p => p.map(tx => tx.id === mData.id ? { ...t, id: mData.id, createdAt: tx.createdAt } : tx));
-        } else {
-            addTxn(t);
-        }
-        closeM();
-    };
-
-    const delTxn = (id, callback) => {
-        if (!id) return;
-        const t = txns.find(x => x.id === id);
-        if (!t) return;
-        triggerHaptic();
-        
-        setTxns(p => p.filter(x => x.id !== id));
-        
-        if (t.type === 'transfer') {
-            setWallets(p => p.map(w => {
-                if (w.id === t.transferFrom) return { ...w, balance: w.balance + t.amount };
-                if (w.id === t.transferTo) return { ...w, balance: w.balance - t.amount };
-                return w;
-            }));
-        } else if (t.walletId) {
-            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? -t.amount : t.amount) } : w));
-        }
-        
-        setUndoTxn({ txn: t });
-        if (callback) callback();
-    };
-
-    const undoDelete = () => {
-        if (!undoTxn) return;
-        const t = undoTxn.txn;
-        
-        setTxns(p => [t, ...p]);
-        
-        if (t.type === 'transfer') {
-            setWallets(p => p.map(w => {
-                if (w.id === t.transferFrom) return { ...w, balance: w.balance - t.amount };
-                if (w.id === t.transferTo) return { ...w, balance: w.balance + t.amount };
-                return w;
-            }));
-        } else if (t.walletId) {
-            setWallets(p => p.map(w => w.id === t.walletId ? { ...w, balance: w.balance + (t.type === 'income' ? t.amount : -t.amount) } : w));
-        }
-        
+    const undoDelete=async()=>{
+        if(!undoTxn)return;
+        const t=undoTxn.txn;
         setUndoTxn(null);
+        try{
+            const {error}=await sb.from('transactions').update({is_deleted:false}).eq('id',t.id);
+            if(error)throw error;
+            setTxns(p=>[t,...p]);
+            await applyWalletDelta(txnDelta(t));
+            toast('Transaksi dipulihkan','ok');
+        }catch(e){toast('Gagal memulihkan transaksi: '+errMsg(e));}
     };
 
-    const addNote=n=>{triggerHaptic();setNotes(p=>[{...n,id:genId(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...p]);};
-    const updNote=(id,u)=>setNotes(p=>p.map(n=>n.id===id?{...n,...u,updatedAt:new Date().toISOString()}:n));
-    const delNote=id=>setNotes(p=>p.filter(n=>n.id!==id));
-    
-    const addTodo=t=>{triggerHaptic();setTodos(p=>[{...t,id:genId(),completed:false,createdAt:new Date().toISOString()},...p]);};
-    const togTodo=id=>{
-        const todo = todos.find(t => t.id === id);
-        if (todo && !todo.completed && todo.budget > 0) {
-            openM('todoBudget', todo);
-        } else {
-            setTodos(p=>p.map(t=>t.id===id?{...t,completed:!t.completed}:t));
-        }
+    const addNote=async n=>{
+        triggerHaptic();
+        try{
+            const {data,error}=await sb.from('notes').insert({user_id:user.id,title:n.title||'',content:n.content||'',tags:n.tags||[],pinned:!!n.pinned}).select().single();
+            if(error)throw error;
+            setNotes(p=>[rowToNote(data),...p]);
+            return true;
+        }catch(e){toast('Gagal menyimpan catatan: '+errMsg(e));return false;}
     };
-    const delTodo=id=>setTodos(p=>p.filter(t=>t.id!==id));
-    
-    const completeTodoWithExpense = (todoId, realCost, walletId) => {
-        const todo = todos.find(t => t.id === todoId);
-        setTodos(p => p.map(t => t.id === todoId ? { ...t, completed: true } : t));
-        if (todo) {
-            addTxn({
-                type: 'expense',
-                amount: realCost,
-                category: 'lainnya_e',
-                note: `[Auto-Todo] ${todo.title}`,
-                date: getToday(),
-                walletId: walletId
-            });
+    const updNote=async(id,u)=>{
+        try{
+            const {data,error}=await sb.from('notes').update({title:u.title||'',content:u.content||'',tags:u.tags||[],pinned:!!u.pinned,updated_at:new Date().toISOString()}).eq('id',id).select().single();
+            if(error)throw error;
+            setNotes(p=>p.map(n=>n.id===id?rowToNote(data):n));
+            return true;
+        }catch(e){toast('Gagal memperbarui catatan: '+errMsg(e));return false;}
+    };
+    const delNote=async id=>{
+        try{
+            const {error}=await sb.from('notes').delete().eq('id',id);
+            if(error)throw error;
+            setNotes(p=>p.filter(n=>n.id!==id));
+        }catch(e){toast('Gagal menghapus catatan: '+errMsg(e));}
+    };
+
+    const addTodo=async t=>{
+        triggerHaptic();
+        try{
+            const {data,error}=await sb.from('todos').insert({user_id:user.id,title:t.title,completed:false,deadline:t.deadline||null,budget:t.budget||0}).select().single();
+            if(error)throw error;
+            setTodos(p=>[rowToTodo(data),...p]);
+            return true;
+        }catch(e){toast('Gagal menambah tugas: '+errMsg(e));return false;}
+    };
+    const togTodo=async id=>{
+        const todo=todos.find(t=>t.id===id);
+        if(!todo)return;
+        if(!todo.completed&&todo.budget>0){openM('todoBudget',todo);return;}
+        const nv=!todo.completed;
+        try{
+            const {error}=await sb.from('todos').update({completed:nv}).eq('id',id);
+            if(error)throw error;
+            setTodos(p=>p.map(t=>t.id===id?{...t,completed:nv}:t));
+        }catch(e){toast('Gagal memperbarui tugas: '+errMsg(e));}
+    };
+    const delTodo=async id=>{
+        try{
+            const {error}=await sb.from('todos').delete().eq('id',id);
+            if(error)throw error;
+            setTodos(p=>p.filter(t=>t.id!==id));
+        }catch(e){toast('Gagal menghapus tugas: '+errMsg(e));}
+    };
+
+    const completeTodoWithExpense=async(todoId,realCost,walletId)=>{
+        const todo=todos.find(t=>t.id===todoId);
+        try{
+            const {error}=await sb.from('todos').update({completed:true}).eq('id',todoId);
+            if(error)throw error;
+            setTodos(p=>p.map(t=>t.id===todoId?{...t,completed:true}:t));
+        }catch(e){toast('Gagal memperbarui tugas: '+errMsg(e));return;}
+        if(todo){
+            const fallback=expCats.find(c=>c.id==='lainnya_e')||expCats[expCats.length-1];
+            await addTxn({type:'expense',amount:realCost,category:fallback?fallback.id:'',note:`[Auto-Todo] ${todo.title}`,date:getToday(),walletId:walletId});
         }
         closeM();
     };
-
-    const skipTodoExpense = (todoId) => {
-        setTodos(p => p.map(t => t.id === todoId ? { ...t, completed: true } : t));
-        closeM();
+    const skipTodoExpense=async todoId=>{
+        try{
+            const {error}=await sb.from('todos').update({completed:true}).eq('id',todoId);
+            if(error)throw error;
+            setTodos(p=>p.map(t=>t.id===todoId?{...t,completed:true}:t));
+            closeM();
+        }catch(e){toast('Gagal memperbarui tugas: '+errMsg(e));}
     };
 
-    const addDebt=d=>{triggerHaptic();setDebts(p=>[{...d,id:genId(),status:'pending',createdAt:new Date().toISOString()},...p]);};
-    const togDebt=id=>setDebts(p=>p.map(d=>d.id===id?{...d,status:d.status==='pending'?'paid':'pending'}:d));
-    const delDebt=id=>setDebts(p=>p.filter(d=>d.id!==id));
-    
+    const addDebt=async d=>{
+        triggerHaptic();
+        try{
+            const {data,error}=await sb.from('debts').insert({user_id:user.id,name:d.name,dtype:d.dtype||'hutang',amount:d.amount,due_date:d.dueDate||null,note:d.note||'',status:'pending'}).select().single();
+            if(error)throw error;
+            setDebts(p=>[rowToDebt(data),...p]);
+            return true;
+        }catch(e){toast('Gagal menyimpan hutang: '+errMsg(e));return false;}
+    };
+    const togDebt=async id=>{
+        const d=debts.find(x=>x.id===id);
+        if(!d)return;
+        const ns=d.status==='pending'?'paid':'pending';
+        try{
+            const {error}=await sb.from('debts').update({status:ns}).eq('id',id);
+            if(error)throw error;
+            setDebts(p=>p.map(x=>x.id===id?{...x,status:ns}:x));
+        }catch(e){toast('Gagal memperbarui hutang: '+errMsg(e));}
+    };
+    const delDebt=async id=>{
+        try{
+            const {error}=await sb.from('debts').delete().eq('id',id);
+            if(error)throw error;
+            setDebts(p=>p.filter(x=>x.id!==id));
+        }catch(e){toast('Gagal menghapus hutang: '+errMsg(e));}
+    };
+
+    const addWallet=async w=>{
+        try{
+            const {data,error}=await sb.from('wallets').insert({user_id:user.id,name:w.name,type:w.type,balance:0}).select().single();
+            if(error)throw error;
+            setWallets(p=>[...p,rowToWallet(data)]);
+            return true;
+        }catch(e){toast('Gagal menambah dompet: '+errMsg(e));return false;}
+    };
+
+    const saveBudgets=async list=>{
+        try{
+            for(const b of list){
+                const {error}=await sb.from('budgets').update({category:b.category,categories:(b.categories&&b.categories.length)?b.categories:[b.category],amount_limit:b.limit||0,period:b.period||'monthly'}).eq('id',b.id);
+                if(error)throw error;
+            }
+            setBudgets(list.map(b=>({...b,categories:(b.categories&&b.categories.length)?b.categories:[b.category]})));
+            return true;
+        }catch(e){toast('Gagal menyimpan budget: '+errMsg(e));return false;}
+    };
+
+    const addCat=async(name,type)=>{
+        const nm=String(name||'').trim();
+        if(!nm)return false;
+        const code='c'+genId();
+        const color=CAT_COLORS[Math.floor(Math.random()*CAT_COLORS.length)];
+        try{
+            const {data,error}=await sb.from('categories').insert({user_id:user.id,name:nm,color,type,code}).select().single();
+            if(error)throw error;
+            const c=rowToCat(data);
+            if(type==='expense')setExpCats(p=>[...p,c]);else setIncCats(p=>[...p,c]);
+            return true;
+        }catch(e){toast('Gagal menambah kategori: '+errMsg(e));return false;}
+    };
+    const delCat=async id=>{
+        const c=allCats.find(x=>x.id===id);
+        if(!c)return false;
+        try{
+            const {error}=await sb.from('categories').delete().eq('id',c.dbId);
+            if(error)throw error;
+            setExpCats(p=>p.filter(x=>x.id!==id));
+            setIncCats(p=>p.filter(x=>x.id!==id));
+            return true;
+        }catch(e){toast('Gagal menghapus kategori: '+errMsg(e));return false;}
+    };
+
     const openM=(t,d=null)=>{setMData(d);setModal(t)};
     const closeM=()=>{setModal(null);setMData(null)};
-    
+
     const tabs=['home','notes','finance','settings'];
     const tabIdx=tabs.indexOf(tab);
     const touchStartX=useRef(0);
@@ -591,15 +1024,35 @@ function App(){
         }
     };
 
+    // ===== Fase 3: layar error saat gagal memuat data dari server =====
+    if(bootError&&!loading){
+        return(
+            <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center gap-5">
+                <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center text-red-400"><I.Alert/></div>
+                <div>
+                    <h1 className="text-xl font-bold mb-2">Gagal memuat data</h1>
+                    <p className="text-dark-400 text-sm max-w-xs mx-auto leading-relaxed">{bootError}</p>
+                </div>
+                <button onClick={boot} className="px-8 py-3 rounded-xl bg-blue-600 text-white text-sm font-semibold">Coba Lagi</button>
+                <button onClick={()=>sb.auth.signOut()} className="text-dark-500 text-xs underline">Keluar dari akun</button>
+            </div>
+        );
+    }
+
     return(
         <div className="pb-20 min-h-screen" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+            {!online&&(
+                <div className="fixed top-0 left-0 right-0 max-w-md mx-auto bg-red-600/95 text-white text-center text-[11px] font-medium py-1.5 z-[65]">
+                    Kamu sedang offline — perubahan tidak bisa disimpan
+                </div>
+            )}
             <div className="px-4 pt-4 page-enter" key={pageKey}>
-                {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM}/>}
-                {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM}/>}
-                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} setWallets={setWallets} setBudgets={setBudgets} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM}/>}
-                {tab==='settings'&&<SetMod wallets={wallets} setWallets={setWallets} txns={txns} budgets={budgets} setBudgets={setBudgets} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} setExpCats={setExpCats} setIncCats={setIncCats} streak={streak} openM={openM} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey}/>}
+                {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM} loading={loading}/>}
+                {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM} loading={loading}/>}
+                {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM} loading={loading}/>}
+                {tab==='settings'&&<SetMod wallets={wallets} txns={txns} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} addCat={addCat} delCat={delCat} streak={streak} user={user} toast={toast} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey} onRefresh={boot}/>}
             </div>
-            
+
             <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
                 <div className="flex items-center justify-around">
                     <NB ic={<I.Home/>} lb="Home" ac={tab==='home'} fn={()=>{setTab('home');setPageKey(k=>k+1)}}/>
@@ -611,19 +1064,18 @@ function App(){
                     <NB ic={<I.Gear/>} lb="Setting" ac={tab==='settings'} fn={()=>{setTab('settings');setPageKey(k=>k+1)}}/>
                 </div>
             </nav>
-            
+
             {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='scanReceipt'&&<SyncErrorBoundary close={closeM}><ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw}/></SyncErrorBoundary>}
+            {modal==='scanReceipt'&&<ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw}/>}
             {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
-            {modal==='addNote'&&<NoteM close={closeM} save={mData?.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
-            {modal==='addWallet'&&<WalletM close={closeM} save={w=>setWallets(p=>[...p,{...w,id:genId(),balance:0}])}/>}
-            {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={setBudgets}/>}
+            {modal==='addNote'&&<NoteM close={closeM} save={mData&&mData.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
+            {modal==='addWallet'&&<WalletM close={closeM} save={addWallet}/>}
+            {modal==='editBudget'&&<BudgetM close={closeM} budgets={budgets} expCats={expCats} save={saveBudgets}/>}
             {modal==='addDebt'&&<DebtM close={closeM} save={addDebt}/>}
-            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id, closeM)}} getCat={getCat} wallets={wallets}/>}
-            {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} save={mData==='expense'?setExpCats:setIncCats} type={mData}/>}
+            {modal==='txnDetail'&&<TxnDetailM txn={mData} close={closeM} del={()=>{delTxn(mData.id,closeM)}} getCat={getCat} wallets={wallets}/>}
+            {modal==='editCats'&&<CatEditM close={closeM} cats={mData==='expense'?expCats:incCats} catType={mData} addCat={addCat} delCat={delCat}/>}
             {modal==='todoBudget'&&<TodoBudgetM close={closeM} todo={mData} completeWithExpense={completeTodoWithExpense} skipExpense={skipTodoExpense} wallets={wallets}/>}
-            {modal==='p2pSync'&&<SyncErrorBoundary close={closeM}><P2PSync close={closeM}/></SyncErrorBoundary>}
-            
+
             {undoTxn&&(
                 <div className="fixed bottom-24 left-0 right-0 max-w-md mx-auto px-4 z-50 pointer-events-none">
                     <div className="pointer-events-auto bg-dark-700/95 backdrop-blur border border-white/10 rounded-2xl p-3 flex items-center justify-between shadow-2xl modal-ct">
@@ -636,28 +1088,6 @@ function App(){
     );
 }
 
-class SyncErrorBoundary extends React.Component {
-    constructor(props){super(props);this.state={hasError:false};}
-    static getDerivedStateFromError(){return{hasError:true};}
-    componentDidCatch(err,info){console.error('P2P Sync error:',err,info);}
-    render(){
-        if(this.state.hasError){
-            return(
-                <div className="fixed inset-0 z-50 flex items-center justify-center modal-ov" onClick={this.props.close}>
-                    <div className="absolute inset-0 bg-black/60"/>
-                    <div className="relative w-full max-w-md bg-dark-800 rounded-3xl p-6 text-center modal-ct mx-4" onClick={e=>e.stopPropagation()}>
-                        <div className="w-16 h-16 bg-yellow-500/20 rounded-full flex items-center justify-center mx-auto mb-4 text-yellow-400 text-2xl">⚠️</div>
-                        <p className="font-bold text-lg mb-2">Modul Sinkronisasi Gagal Dimuat</p>
-                        <p className="text-dark-400 text-sm mb-5">Jangan khawatir, data Anda aman. Gunakan tombol Ekspor / Impor JSON di Pengaturan sebagai jalur alternatif yang 100% offline.</p>
-                        <button onClick={this.props.close} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600">Tutup</button>
-                    </div>
-                </div>
-            );
-        }
-        return this.props.children;
-    }
-}
-
 function CamError({onBack,onPaste,pasteValue,setPaste}){
     return(
         <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-5 text-center space-y-3">
@@ -668,7 +1098,7 @@ function CamError({onBack,onPaste,pasteValue,setPaste}){
             <div className="text-left text-xs text-dark-300 space-y-1.5 bg-dark-900/60 rounded-xl p-3.5 leading-relaxed">
                 <p>1. Ketuk ikon <b>gembok 🔒</b> di address bar browser.</p>
                 <p>2. Buka <b>Izin Situs / Site settings</b> → <b>Kamera</b> → pilih <b>Izinkan</b>.</p>
-                <p>3. Kembali ke aplikasi, tutup lalu buka lagi menu sinkronisasi.</p>
+                <p>3. Kembali ke aplikasi, lalu coba lagi.</p>
             </div>
             {onPaste&&(<>
                 <p className="text-[11px] text-dark-400">Tanpa kamera: minta pengirim menekan "Salin Teks" di QR-nya, kirim via WA/Telegram, lalu tempel di sini.</p>
@@ -682,7 +1112,7 @@ function CamError({onBack,onPaste,pasteValue,setPaste}){
 
 function NB({ic,lb,ac,fn}){return<button onClick={fn} className={`flex flex-col items-center py-2 px-3 rounded-lg transition-all ${ac?'text-blue-400':'text-dark-400'}`}>{ic}<span className="text-[10px] mt-1 font-medium">{lb}</span></button>}
 
-function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, todos, budgets, catSpend, streak, allCats, openM}){
+function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns, todos, budgets, catSpend, streak, allCats, openM, loading}){
     const now=new Date();const g=now.getHours()<12?'Selamat Pagi':now.getHours()<18?'Selamat Siang':'Selamat Malam';
     const dn=now.toLocaleDateString('id-ID',{weekday:'long'});
     const pendTodos=todos.filter(t=>!t.completed).slice(0,4);
@@ -695,6 +1125,7 @@ function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns
     const streakClass=sc>=365?'streak-legend':sc>=100?'streak-diamond':sc>=50?'streak-gold':'';
     const streakTextColor=sc>=50?'text-dark-900':'text-orange-400';
     const streakBgText=sc>=50?'text-dark-700':'text-dark-400';
+    if(loading)return<DashSkel/>;
 
     return(
         <div className="space-y-5">
@@ -776,7 +1207,7 @@ function Dash({wallets, totalBal, mIncome, mExpense, remain, todayExp, todayTxns
     );
 }
 
-function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,totalBal,allCats,getCat,setWallets,setBudgets,addDebt,togDebt,delDebt,delTxn,openM}){
+function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,totalBal,allCats,getCat,addDebt,togDebt,delDebt,delTxn,openM,loading}){
     const[sub,setSub]=useState('overview');
     return(
         <div className="space-y-4">
@@ -786,10 +1217,17 @@ function FinMod({wallets,txns,mTxns,budgets,catSpend,mIncome,mExpense,debts,tota
                     <button key={t.id} onClick={()=>setSub(t.id)} className={`px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${sub===t.id?'bg-blue-600 text-white':'text-dark-400'}`}>{t.l}</button>
                 ))}
             </div>
-            {sub==='overview'&&<FinOverview wallets={wallets} mIncome={mIncome} mExpense={mExpense} totalBal={totalBal} catSpend={catSpend} allCats={allCats} txns={txns} openM={openM}/>}
-            {sub==='transactions'&&<TxnList txns={txns} getCat={getCat} openM={openM} delTxn={delTxn} wallets={wallets}/>}
-            {sub==='budget'&&<BudgetView budgets={budgets} catSpend={catSpend} allCats={allCats} openM={openM}/>}
-            {sub==='debts'&&<DebtView debts={debts} openM={openM} tog={togDebt} del={delDebt}/>}
+            {loading?(
+                <div className="space-y-3">
+                    <div className="h-28 bg-dark-700 rounded-2xl animate-pulse"/>
+                    {[1,2,3,4].map(i=><div key={i} className="h-14 bg-dark-700 rounded-xl animate-pulse"/>)}
+                </div>
+            ):(<>
+                {sub==='overview'&&<FinOverview wallets={wallets} mIncome={mIncome} mExpense={mExpense} totalBal={totalBal} catSpend={catSpend} allCats={allCats} txns={txns} openM={openM}/>}
+                {sub==='transactions'&&<TxnList txns={txns} getCat={getCat} openM={openM} delTxn={delTxn} wallets={wallets}/>}
+                {sub==='budget'&&<BudgetView budgets={budgets} catSpend={catSpend} allCats={allCats} openM={openM}/>}
+                {sub==='debts'&&<DebtView debts={debts} openM={openM} tog={togDebt} del={delDebt}/>}
+            </>)}
         </div>
     );
 }
@@ -912,7 +1350,7 @@ function DebtView({debts,openM,tog,del}){
     );
 }
 
-function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,openM}){
+function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,openM,loading}){
     const[sub,setSub]=useState('notes');const[q,setQ]=useState('');const[tag,setTag]=useState('all');
     const allTags=useMemo(()=>{const s=new Set();notes.forEach(n=>(n.tags||[]).forEach(t=>s.add(t)));return['all',...Array.from(s)]},[notes]);
     const filtered=useMemo(()=>{let f=notes;if(q)f=f.filter(n=>n.title.toLowerCase().includes(q.toLowerCase())||n.content.toLowerCase().includes(q.toLowerCase()));if(tag!=='all')f=f.filter(n=>(n.tags||[]).includes(tag));return f.sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0)||new Date(b.updatedAt)-new Date(a.updatedAt))},[notes,q,tag]);
@@ -924,12 +1362,12 @@ function NotesMod({notes,todos,addNote,updNote,delNote,addTodo,togTodo,delTodo,o
                 <button onClick={()=>setSub('notes')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='notes'?'bg-blue-600 text-white':'text-dark-400'}`}>Catatan ({notes.length})</button>
                 <button onClick={()=>setSub('todos')} className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all ${sub==='todos'?'bg-blue-600 text-white':'text-dark-400'}`}>To-Do ({pend.length})</button>
             </div>
-            {sub==='notes'&&(<div className="space-y-3">
+            {sub==='notes'&&(loading?<div className="grid grid-cols-2 gap-3">{[1,2,3,4].map(i=><div key={i} className="h-32 bg-dark-700 rounded-xl animate-pulse"/>)}</div>:<div className="space-y-3">
                 <div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-400"><I.Search/></span><input type="text" placeholder="Cari catatan..." value={q} onChange={e=>setQ(e.target.value)} className="pl-10"/></div>
                 <div className="flex gap-2 overflow-x-auto sb-hide pb-1">{allTags.map(t=>(<button key={t} onClick={()=>setTag(t)} className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all ${tag===t?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}>{t==='all'?'Semua':`#${t}`}</button>))}</div>
                 {filtered.length>0?<div className="grid grid-cols-2 gap-3">{filtered.map(n=>(<div key={n.id} className="bg-dark-700 rounded-xl p-3 ch cursor-pointer relative" onClick={()=>openM('addNote',n)}>{n.pinned&&<span className="absolute top-2 right-2 text-blue-400"><I.Pin/></span>}<p className="font-medium text-sm truncate pr-5">{n.title||'Tanpa Judul'}</p><p className="text-dark-400 text-xs mt-1" style={{display:'-webkit-box',WebkitLineClamp:3,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{n.content}</p><div className="flex items-center justify-between mt-2"><div className="flex gap-1">{(n.tags||[]).slice(0,2).map(t=>(<span key={t} className="text-[9px] bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">#{t}</span>))}</div><span className="text-[9px] text-dark-500">{fmtD(n.updatedAt)}</span></div></div>))}</div>:(<div className="text-center py-12"><p className="text-dark-500 text-3xl font-bold mb-2">--</p><p className="text-dark-400">Belum ada catatan</p><button onClick={()=>openM('addNote')} className="mt-3 text-blue-400 text-sm font-medium">+ Buat Catatan</button></div>)}
             </div>)}
-            {sub==='todos'&&(<div className="space-y-4">
+            {sub==='todos'&&(loading?<div className="space-y-2">{[1,2,3].map(i=><div key={i} className="h-14 bg-dark-700 rounded-xl animate-pulse"/>)}</div>:<div className="space-y-4">
                 <TodoQuick add={addTodo}/>
                 {pend.length>0&&<><p className="text-dark-400 text-xs font-medium">Belum Selesai ({pend.length})</p><div className="space-y-2">{pend.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
                 {done.length>0&&<><p className="text-dark-400 text-xs font-medium mt-4">Selesai ({done.length})</p><div className="space-y-2">{done.map(t=>(<SwipeItem key={t.id} onDel={()=>delTodo(t.id)}><TodoItem t={t} tog={togTodo}/></SwipeItem>))}</div></>}
@@ -943,17 +1381,20 @@ function TodoQuick({ add }) {
     const [t, setT] = useState('');
     const [deadline, setDeadline] = useState('');
     const [budget, setBudget] = useState('');
-    const h = e => {
+    const [busy, setBusy] = useState(false);
+    const h = async e => {
         e.preventDefault();
-        if (!t.trim()) return;
-        add({ title: t.trim(), deadline: deadline || null, budget: parseFloat(budget) || 0 });
-        setT(''); setDeadline(''); setBudget('');
+        if (!t.trim() || busy) return;
+        setBusy(true);
+        const ok = await add({ title: t.trim(), deadline: deadline || null, budget: parseFloat(budget) || 0 });
+        setBusy(false);
+        if (ok !== false) { setT(''); setDeadline(''); setBudget(''); }
     };
     return (
         <form onSubmit={h} className="space-y-2">
             <div className="flex gap-2">
                 <input type="text" placeholder="Tambah tugas baru..." value={t} onChange={e => setT(e.target.value)} className="flex-1" />
-                <button type="submit" className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium shrink-0">+</button>
+                <button type="submit" disabled={busy} className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium shrink-0 disabled:opacity-50">{busy?'...':'+'}</button>
             </div>
             <div className="flex gap-2">
                 <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} className="text-xs flex-1" />
@@ -980,38 +1421,52 @@ function TodoItem({ t, tog }) {
     );
 }
 
-function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,expCats,incCats,setExpCats,setIncCats,streak,openM,ocrProvider,setOcrProvider,ocrKey,setOcrKey}){
+function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,streak,user,toast,ocrProvider,setOcrProvider,ocrKey,setOcrKey,onRefresh}){
     const[isInstalled,setIsInstalled]=useState(false);
+    const[busy,setBusy]=useState(false);
     useEffect(()=>{if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone){setIsInstalled(true)}},[]);
     const handleInstall=async()=>{
         if(window.deferredPrompt){window.deferredPrompt.prompt();const{outcome}=await window.deferredPrompt.userChoice;window.deferredPrompt=null;}
-        else{alert('Untuk menginstall: buka menu browser (titik tiga) → "Install App" atau "Add to Home Screen"');}
+        else{alert('Untuk menginstall: buka menu browser (titik tiga) \u2192 "Install App" atau "Add to Home Screen"');}
     };
-    const exp=()=>{const d={wallets,txns,budgets,notes,todos,debts,expCats,incCats,at:new Date().toISOString()};const b=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-${getToday()}.json`;a.click();URL.revokeObjectURL(u)};
-    const imp=()=>{const fi=document.getElementById('nhImportFile');if(fi)fi.click();};
-    const onImpFile=e=>{
-        const file=e.target.files&&e.target.files[0];e.target.value='';if(!file)return;
-        const reader=new FileReader();
-        reader.onload=ev=>{
-            try{
-                const d=JSON.parse(ev.target.result);
-                const map={wallets:'nh_w',txns:'nh_tx',budgets:'nh_bg',notes:'nh_n',todos:'nh_td',debts:'nh_db',expCats:'nh_ec',incCats:'nh_ic',streak:'nh_sk'};
-                let n=0;
-                Object.entries(map).forEach(([src,dst])=>{if(d[src]!==undefined){localStorage.setItem(dst,JSON.stringify(d[src]));n++;}});
-                ['nh_w','nh_tx','nh_bg','nh_n','nh_td','nh_db','nh_ec','nh_ic','nh_sk'].forEach(k=>{if(d[k]!==undefined){localStorage.setItem(k,d[k]);n++;}});
-                if(!n)throw new Error('empty');
-                if(confirm(`Impor berhasil (${n} grup data). Muat ulang sekarang?`))location.reload();
-            }catch(err){alert('File tidak valid. Gunakan file hasil Ekspor NataHidup.');}
-        };
-        reader.readAsText(file);
+    const refresh=async()=>{
+        if(busy)return;
+        setBusy(true);
+        await onRefresh();
+        setBusy(false);
+        toast('Data dimuat ulang dari server','ok');
     };
-    const reset=()=>{if(confirm('Hapus semua data? Tindakan ini tidak bisa dibatalkan.')){localStorage.clear();location.reload()}};
+    // Fase 4: pengganti ekspor JSON = unduh laporan transaksi (CSV)
+    const dlReport=()=>{
+        if(!txns.length){alert('Belum ada transaksi untuk dilaporkan.');return;}
+        const esc=v=>{const s=(v===null||v===undefined)?'':String(v);return /[",;\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+        const allC=[...expCats,...incCats];
+        const catName=id=>{const c=allC.find(x=>x.id===id);return c?c.name:(id||'-')};
+        const wName=id=>{const w=wallets.find(x=>x.id===id);return w?w.name:'-'};
+        const rows=[['Tanggal','Tipe','Kategori','Dompet','Jumlah','Catatan']];
+        [...txns].sort((a,b)=>String(a.date).localeCompare(String(b.date))).forEach(t=>{
+            const dompet=t.type==='transfer'?(wName(t.transferFrom)+' -> '+wName(t.transferTo)):wName(t.walletId);
+            rows.push([t.date,t.type,t.type==='transfer'?'Transfer':catName(t.category),dompet,t.amount,(t.note||'').replace(/\r?\n/g,' ')]);
+        });
+        const csv='\uFEFF'+rows.map(r=>r.map(esc).join(';')).join('\r\n');
+        const b=new Blob([csv],{type:'text/csv;charset=utf-8'});
+        const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-laporan-${getToday()}.csv`;a.click();URL.revokeObjectURL(u);
+    };
+    const signOut=async()=>{if(confirm('Keluar dari akun ini?'))await sb.auth.signOut();};
     return(
         <div className="space-y-4">
             <div className="pt-2"><h1 className="text-2xl font-bold">Pengaturan</h1><p className="text-dark-400 text-sm mt-1">Kelola aplikasi NataHidup</p></div>
-            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v2.3.0</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
+            <div className="bg-dark-700 rounded-2xl p-5 text-center"><h2 className="text-xl font-bold">NataHidup</h2><p className="text-dark-400 text-sm mt-1">v3.0.0 \u00b7 Online</p><p className="text-dark-500 text-xs mt-2">Produktivitas dan Keuangan Pribadi</p></div>
+            <div className="bg-dark-700 rounded-2xl p-4">
+                <h3 className="font-semibold text-sm mb-3">Akun</h3>
+                <div className="flex items-center gap-3 bg-dark-600 rounded-xl p-3">
+                    <div className="w-9 h-9 rounded-full bg-blue-600/30 text-blue-300 flex items-center justify-center font-bold text-sm shrink-0">{String(user.email||'?').charAt(0).toUpperCase()}</div>
+                    <div className="flex-1 min-w-0"><p className="text-sm truncate">{user.email}</p><p className="text-[10px] text-green-400 flex items-center gap-1">\u2601 Data tersinkronisasi ke cloud</p></div>
+                </div>
+                <button onClick={signOut} className="w-full mt-3 py-2.5 rounded-xl bg-dark-600 text-sm text-dark-300 ch">Keluar (Sign Out)</button>
+            </div>
             {!isInstalled&&(<button onClick={handleInstall} className="w-full bg-blue-600 hover:bg-blue-700 rounded-2xl p-4 flex items-center justify-center gap-3 ch"><I.DL/><span className="font-semibold text-sm">Install App ke Homescreen</span></button>)}
-            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Kategori</h3><div className="space-y-3"><CatEditInline cats={expCats} set={setExpCats} type="expense"/><CatEditInline cats={incCats} set={setIncCats} type="income"/></div></div>
+            <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Kategori</h3><div className="space-y-3"><CatEditInline cats={expCats} addCat={addCat} delCat={delCat} type="expense"/><CatEditInline cats={incCats} addCat={addCat} delCat={delCat} type="income"/></div></div>
             <div className="bg-dark-700 rounded-2xl p-4"><h3 className="font-semibold text-sm mb-3">Statistik</h3><div className="space-y-2">
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Transaksi</span><span>{txns.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Catatan</span><span>{notes.length}</span></div>
@@ -1019,36 +1474,28 @@ function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,ex
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Hutang/Piutang</span><span>{debts.length}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-dark-400">Streak Terpanjang</span><span>{streak.longest} hari</span></div>
             </div></div>
-            
+
             <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
                 <h3 className="font-semibold text-sm">Scan Struk (OCR)</h3>
                 <select value={ocrProvider} onChange={e=>setOcrProvider(e.target.value)}>
-                    <option value="offline">Offline — Tesseract.js (gratis, tanpa internet)</option>
+                    <option value="offline">Offline \u2014 Tesseract.js (gratis)</option>
                     <option value="taggun">Taggun API (online, akurasi tinggi)</option>
                     <option value="mindee">Mindee API (online)</option>
                 </select>
-                {ocrProvider!=='offline'&&(<div className="space-y-2"><input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>{!navigator.onLine&&<p className="text-[10px] text-yellow-400">Kamu sedang offline — scan akan otomatis memakai OCR offline.</p>}</div>)}
-                <p className="text-[10px] text-dark-500">{ocrProvider==='offline'?'Model bahasa (~5 MB) diunduh sekali saat pertama dipakai, lalu tersimpan di perangkat.':'API key hanya disimpan di perangkatmu (localStorage) dan dikirim langsung ke provider. Jika API gagal atau kamu sedang offline, otomatis fallback ke OCR offline.'}</p>
+                {ocrProvider!=='offline'&&(<input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>)}
+                <p className="text-[10px] text-dark-500">{ocrProvider==='offline'?'Model bahasa (~5 MB) diunduh sekali saat pertama dipakai, lalu tersimpan di perangkat.':'API key hanya disimpan di perangkat ini dan dikirim langsung ke provider. Jika API gagal, otomatis fallback ke OCR offline.'}</p>
             </div>
             <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
-                <h3 className="font-semibold text-sm">Data & Sinkronisasi</h3>
-                <button onClick={() => openM('p2pSync')} className="w-full flex items-center gap-3 py-3 px-4 bg-blue-600/20 text-blue-400 rounded-xl text-sm ch border border-blue-500/30">
-                    <I.Transfer />
-                    <span>Sinkronisasi P2P (Tanpa Server)</span>
+                <h3 className="font-semibold text-sm">Data Cloud</h3>
+                <button onClick={refresh} disabled={busy} className="w-full flex items-center gap-3 py-3 px-4 bg-blue-600/20 text-blue-400 rounded-xl text-sm ch border border-blue-500/30 disabled:opacity-50">
+                    <I.Repeat />
+                    <span>{busy?'Memuat ulang...':'Muat Ulang Data dari Server'}</span>
                 </button>
-                <button onClick={imp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
-                    <I.Up />
-                    <span>Impor Data (JSON)</span>
-                </button>
-                <input id="nhImportFile" type="file" accept=".json,application/json" className="hidden" onChange={onImpFile} />
-                <button onClick={exp} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
+                <button onClick={dlReport} className="w-full flex items-center gap-3 py-3 px-4 bg-dark-600 rounded-xl text-sm ch">
                     <I.DL />
-                    <span>Ekspor Data (JSON)</span>
+                    <span>Unduh Laporan Transaksi (CSV)</span>
                 </button>
-                <button onClick={reset} className="w-full flex items-center gap-3 py-3 px-4 bg-red-500/10 rounded-xl text-sm text-red-400 ch">
-                    <I.Trash />
-                    <span>Reset Semua Data</span>
-                </button>
+                <p className="text-[10px] text-dark-500">Data tersimpan otomatis di cloud dan mengikuti akun ini di perangkat mana pun \u2014 fitur sinkronisasi P2P serta ekspor/impor JSON tidak diperlukan lagi.</p>
             </div>
 
             <div className="bg-gradient-to-br from-blue-600/10 to-purple-600/10 border border-blue-500/20 rounded-2xl p-5"><h3 className="font-bold text-sm mb-3 flex items-center gap-2">Tentang NataHidup</h3><div className="space-y-3 text-xs text-dark-300 leading-relaxed"><p>NataHidup lahir dari frustrasi yang sama seperti kamu: buka aplikasi keuangan, malah jadi stress lihat angka merah. Buka notes, malah bingung cari catatan yang mana.</p><p>Kami percaya mengatur hidup nggak harus ribet. Makanya NataHidup didesain sederhana -- catat pengeluaran 5 detik, tulis catatan tanpa ribet, dan lihat progress hematmu dalam bentuk streak yang bikin ketagihan.</p><p className="text-blue-400 font-medium">Fitur favorit kami? Jeda 24 jam di Wishlist. Setiap kali kamu pengen beli barang impulsif, sistem maksa kamu tunggu sehari. 90% dari waktu, keesokan harinya kamu sadar: "Sebenarnya aku nggak butuh ini."</p><p>Itu inti NataHidup: bukan cuma catat, tapi bantu kamu <span className="text-white font-semibold">berpikir ulang sebelum bertindak</span>.</p></div></div>
@@ -1057,11 +1504,10 @@ function SetMod({wallets,setWallets,txns,budgets,setBudgets,notes,todos,debts,ex
     );
 }
 
-function CatEditInline({cats,set,type}){
-    const[newName,setNewName]=useState('');
-    const add=()=>{if(!newName.trim())return;set(p=>[...p,{id:genId(),name:newName.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNewName('')};
-    const del=id=>set(p=>p.filter(c=>c.id!==id));
-    return(<div className="space-y-2"><p className="text-xs text-dark-400 font-medium">{type==='expense'?'Pengeluaran':'Pemasukan'}</p><div className="flex flex-wrap gap-1.5">{cats.map(c=>(<span key={c.id} className="flex items-center gap-1 bg-dark-600 rounded-full px-2.5 py-1 text-xs"><CatBadge cat={c} size="sm"/>{c.name}<button onClick={()=>del(c.id)} className="text-dark-400 ml-1 hover:text-red-400"><I.X/></button></span>))}</div><div className="flex gap-2 mt-1"><input type="text" placeholder="Kategori baru..." value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1 text-xs"/><button onClick={add} className="bg-blue-600 text-white px-3 rounded-lg text-xs font-medium">+</button></div></div>);
+function CatEditInline({cats,addCat,delCat,type}){
+    const[newName,setNewName]=useState('');const[busy,setBusy]=useState(false);
+    const add=async()=>{if(!newName.trim()||busy)return;setBusy(true);const ok=await addCat(newName,type);setBusy(false);if(ok)setNewName('')};
+    return(<div className="space-y-2"><p className="text-xs text-dark-400 font-medium">{type==='expense'?'Pengeluaran':'Pemasukan'}</p><div className="flex flex-wrap gap-1.5">{cats.map(c=>(<span key={c.id} className="flex items-center gap-1 bg-dark-600 rounded-full px-2.5 py-1 text-xs"><CatBadge cat={c} size="sm"/>{c.name}<button onClick={()=>delCat(c.id)} className="text-dark-400 ml-1 hover:text-red-400"><I.X/></button></span>))}</div><div className="flex gap-2 mt-1"><input type="text" placeholder="Kategori baru..." value={newName} onChange={e=>setNewName(e.target.value)} className="flex-1 text-xs"/><button onClick={add} disabled={busy} className="bg-blue-600 text-white px-3 rounded-lg text-xs font-medium disabled:opacity-50">{busy?'...':'+'}</button></div></div>);
 }
 
 function MW({close,children,title}){return(<div className="fixed inset-0 z-50 flex items-end justify-center modal-ov" onClick={close}><div className="absolute inset-0 bg-black/60"/><div className="relative w-full max-w-md bg-dark-800 rounded-t-3xl max-h-[92vh] overflow-y-auto modal-ct sb-hide" onClick={e=>e.stopPropagation()}><div className="sticky top-0 bg-dark-800 pt-3 pb-2 px-5 border-b border-dark-700 z-10"><div className="w-10 h-1 bg-dark-600 rounded-full mx-auto mb-3"/><div className="flex justify-between items-center"><h2 className="text-lg font-bold">{title}</h2><button onClick={close} className="text-dark-400 p-1"><I.X/></button></div></div><div className="p-5">{children}</div></div></div>);}
@@ -1079,9 +1525,10 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
     const[date,setDate]=useState(ed?.date||getToday());
     const[recurring,setRec]=useState(ed?.isRecurring||false);
     const[recDay,setRecDay]=useState(ed?.recurringDay||new Date().getDate());
+    const[busy,setBusy]=useState(false);
     const cats=type==='expense'?expCats:incCats;
     const amtVal=evalAmt(amt);const amtOk=!isNaN(amtVal)&&amtVal>0;const showCalc=amtOk&&/[+\-*/]/.test(amt);
-    
+
     useEffect(()=>{
         if(type==='transfer' && transferFrom===transferTo && wallets.length>1){
             const nextW=wallets.find(w=>w.id!==transferFrom);
@@ -1089,26 +1536,32 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
         }
     },[transferFrom, type, wallets]);
 
-    const sub=e=>{
+    // Fase 2: kirim ke server dulu; modal hanya tertutup jika server menjawab sukses
+    const sub=async e=>{
         e.preventDefault();
-        if(!amtOk)return;
+        if(!amtOk||busy)return;
+        let payload;
         if(type==='transfer'){
             if(!transferFrom||!transferTo||transferFrom===transferTo)return;
-            save({type:'transfer',amount:amtVal,note,transferFrom,transferTo,date});
+            payload={type:'transfer',amount:amtVal,note,transferFrom,transferTo,date};
         }else{
             if(!cat)return;
-            save({type,amount:amtVal,category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null});
+            payload={type,amount:amtVal,category:cat,note,walletId:wid,date,isRecurring:recurring,recurringDay:recurring?recDay:null};
         }
+        setBusy(true);
+        const ok=await save(payload);
+        setBusy(false);
+        if(ok!==false)close();
     };
-    
-    return(<MW close={close} title={ed?'Edit Transaksi':'Tambah Transaksi'}>
+    const invalid=!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo));
+    return(<MW close={close} title={ed&&ed.id?'Edit Transaksi':'Tambah Transaksi'}>
         <form onSubmit={sub} className="space-y-4">
             <div className="flex gap-2 bg-dark-700 rounded-xl p-1">
                 <button type="button" onClick={()=>{setType('expense');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='expense'?'bg-red-500 text-white':'text-dark-400'}`}>Keluar</button>
                 <button type="button" onClick={()=>{setType('income');setCat('')}} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='income'?'bg-green-500 text-white':'text-dark-400'}`}>Masuk</button>
                 <button type="button" onClick={()=>setType('transfer')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${type==='transfer'?'bg-blue-500 text-white':'text-dark-400'}`}>Transfer</button>
             </div>
-            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp) — bisa ketik hitungan, misal: 50000+12000</label><input type="text" inputMode="decimal" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
+            <div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp) \u2014 bisa ketik hitungan, misal: 50000+12000</label><input type="text" inputMode="decimal" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)} className="text-2xl font-bold text-center" autoFocus/>{showCalc&&<p className="text-xs text-center text-green-400 font-semibold mt-1">= {fmtC(amtVal)}</p>}</div>
             {type==='transfer'?(
                 <>
                     <div><label className="text-xs text-dark-400 mb-1 block">Dari Dompet</label><select value={transferFrom} onChange={e=>setTransferFrom(e.target.value)}>{wallets.map(w=>(<option key={w.id} value={w.id}>{w.name} ({fmtC(w.balance)})</option>))}</select></div>
@@ -1136,34 +1589,66 @@ function TxnM({close,save,wallets,expCats,incCats,ed}){
                     {recurring&&<div><label className="text-xs text-dark-400 mb-1 block">Tanggal Berulang (tiap bulan)</label><input type="number" min="1" max="28" value={recDay} onChange={e=>setRecDay(parseInt(e.target.value)||1)}/></div>}
                 </>
             )}
-            <button type="submit" disabled={!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${!amtOk||(type!=='transfer'&&!cat)||(type==='transfer'&&(transferFrom===transferTo))?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>Simpan</button>
+            <button type="submit" disabled={invalid||busy} className={`w-full py-3.5 rounded-xl font-semibold text-white transition-all ${invalid||busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Simpan'}</button>
         </form>
     </MW>);
 }
 
 function NoteM({close,save,ed}){
     const[title,setTitle]=useState(ed?.title||'');const[content,setContent]=useState(ed?.content||'');const[tags,setTags]=useState(ed?.tags?.join(', ')||'');const[pinned,setPinned]=useState(ed?.pinned||false);
-    const sub=e=>{e.preventDefault();if(!content.trim()&&!title.trim())return;save({title:title.trim(),content:content.trim(),tags:tags.split(',').map(t=>t.trim()).filter(Boolean),pinned});close()};
-    return(<MW close={close} title={ed?.id?'Edit Catatan':'Catatan Baru'}><form onSubmit={sub} className="space-y-4"><input type="text" placeholder="Judul catatan..." value={title} onChange={e=>setTitle(e.target.value)} className="text-lg font-bold"/><textarea placeholder="Tulis catatan..." value={content} onChange={e=>setContent(e.target.value)} rows={8} className="resize-none"/><div><label className="text-xs text-dark-400 mb-1 block">Tags (pisahkan dengan koma)</label><input type="text" placeholder="Kerjaan, Pribadi, Ide" value={tags} onChange={e=>setTags(e.target.value)}/></div><label className="flex items-center gap-3 py-2 cursor-pointer"><input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)} className="w-4 h-4 accent-blue-600"/><span className="text-sm flex items-center gap-1"><I.Pin/> Sematkan di atas</span></label><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
+    const[busy,setBusy]=useState(false);
+    const sub=async e=>{
+        e.preventDefault();
+        if((!content.trim()&&!title.trim())||busy)return;
+        setBusy(true);
+        const ok=await save({title:title.trim(),content:content.trim(),tags:tags.split(',').map(t=>t.trim()).filter(Boolean),pinned});
+        setBusy(false);
+        if(ok!==false)close();
+    };
+    return(<MW close={close} title={ed?.id?'Edit Catatan':'Catatan Baru'}><form onSubmit={sub} className="space-y-4"><input type="text" placeholder="Judul catatan..." value={title} onChange={e=>setTitle(e.target.value)} className="text-lg font-bold"/><textarea placeholder="Tulis catatan..." value={content} onChange={e=>setContent(e.target.value)} rows={8} className="resize-none"/><div><label className="text-xs text-dark-400 mb-1 block">Tags (pisahkan dengan koma)</label><input type="text" placeholder="Kerjaan, Pribadi, Ide" value={tags} onChange={e=>setTags(e.target.value)}/></div><label className="flex items-center gap-3 py-2 cursor-pointer"><input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)} className="w-4 h-4 accent-blue-600"/><span className="text-sm flex items-center gap-1"><I.Pin/> Sematkan di atas</span></label><button type="submit" disabled={busy} className={`w-full py-3.5 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Simpan'}</button></form></MW>);
 }
 
 function WalletM({close,save}){
     const[name,setName]=useState('');const[type,setType]=useState('cash');
-    const sub=e=>{e.preventDefault();if(!name.trim())return;save({name:name.trim(),type});close()};
-    return(<MW close={close} title="Tambah Dompet"><form onSubmit={sub} className="space-y-4"><div><label className="text-xs text-dark-400 mb-1 block">Nama</label><input type="text" placeholder="Contoh: BCA, GoPay" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-2 block">Tipe</label><div className="grid grid-cols-3 gap-2">{[{id:'cash',l:'Cash'},{id:'bank',l:'Bank'},{id:'ewallet',l:'E-Wallet'}].map(t=>(<button key={t.id} type="button" onClick={()=>setType(t.id)} className={`py-3 rounded-xl text-sm flex flex-col items-center gap-1 ${type===t.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}><WalletIcon type={t.id}/><span className="text-[10px]">{t.l}</span></button>))}</div></div><p className="text-xs text-dark-400">Saldo awal otomatis Rp 0. Tambahkan melalui transaksi pemasukan atau transfer.</p><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
+    const[busy,setBusy]=useState(false);
+    const sub=async e=>{
+        e.preventDefault();
+        if(!name.trim()||busy)return;
+        setBusy(true);
+        const ok=await save({name:name.trim(),type});
+        setBusy(false);
+        if(ok!==false)close();
+    };
+    return(<MW close={close} title="Tambah Dompet"><form onSubmit={sub} className="space-y-4"><div><label className="text-xs text-dark-400 mb-1 block">Nama</label><input type="text" placeholder="Contoh: BCA, GoPay" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-2 block">Tipe</label><div className="grid grid-cols-3 gap-2">{[{id:'cash',l:'Cash'},{id:'bank',l:'Bank'},{id:'ewallet',l:'E-Wallet'}].map(t=>(<button key={t.id} type="button" onClick={()=>setType(t.id)} className={`py-3 rounded-xl text-sm flex flex-col items-center gap-1 ${type===t.id?'bg-blue-600 text-white':'bg-dark-700 text-dark-400'}`}><WalletIcon type={t.id}/><span className="text-[10px]">{t.l}</span></button>))}</div></div><p className="text-xs text-dark-400">Saldo awal otomatis Rp 0. Tambahkan melalui transaksi pemasukan atau transfer.</p><button type="submit" disabled={busy} className={`w-full py-3.5 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Simpan'}</button></form></MW>);
 }
 
 function BudgetM({close,budgets,expCats,save}){
     const[local,setLocal]=useState(budgets);
+    const[busy,setBusy]=useState(false);
     const upd=(id,field,v)=>setLocal(p=>p.map(b=>b.id===id?{...b,[field]:field==='limit'?parseFloat(v)||0:v}:b));
     const toggleCategory=(budgetId,catId)=>{setLocal(p=>p.map(b=>{if(b.id!==budgetId) return b;const cats=b.categories||[b.category];const has=cats.includes(catId);return{...b,categories:has?cats.filter(c=>c!==catId):[...cats,catId]};}))};
-    return(<MW close={close} title="Atur Budget"><div className="space-y-4"><p className="text-dark-400 text-xs">Atur limit, periode, dan kategori yang dipantau.</p>{local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};const trackedCats=b.categories||[b.category];return(<div key={b.id} className="bg-dark-700 rounded-xl p-3 space-y-3"><div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div><div><label className="text-[10px] text-dark-400 mb-1 block">Limit</label><input type="number" value={b.limit} onChange={e=>upd(b.id,'limit',e.target.value)} className="text-sm"/></div><div><label className="text-[10px] text-dark-400 mb-1 block">Periode</label><select value={b.period||'monthly'} onChange={e=>upd(b.id,'period',e.target.value)} className="text-sm"><option value="weekly">Mingguan</option><option value="monthly">Bulanan</option><option value="custom">Custom</option></select></div><div><label className="text-[10px] text-dark-400 mb-1 block">Kategori Dipantau</label><div className="flex flex-wrap gap-1.5">{expCats.map(ec=>(<button key={ec.id} type="button" onClick={()=>toggleCategory(b.id,ec.id)} className={`px-2 py-1 rounded text-[10px] transition-all ${trackedCats.includes(ec.id)?'bg-blue-500/30 text-blue-300 border border-blue-500/50':'bg-dark-600 text-dark-400 border border-transparent'}`}>{ec.name}</button>))}</div></div></div>)})}<button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></div></MW>);
+    const simpan=async()=>{
+        if(busy)return;
+        setBusy(true);
+        const ok=await save(local);
+        setBusy(false);
+        if(ok!==false)close();
+    };
+    return(<MW close={close} title="Atur Budget"><div className="space-y-4"><p className="text-dark-400 text-xs">Atur limit, periode, dan kategori yang dipantau.</p>{local.map(b=>{const cat=expCats.find(c=>c.id===b.category)||{name:b.category,color:'#6b7280'};const trackedCats=b.categories||[b.category];return(<div key={b.id} className="bg-dark-700 rounded-xl p-3 space-y-3"><div className="flex items-center gap-2"><CatBadge cat={cat} size="sm"/><span className="text-sm font-medium">{cat.name}</span></div><div><label className="text-[10px] text-dark-400 mb-1 block">Limit</label><input type="number" value={b.limit} onChange={e=>upd(b.id,'limit',e.target.value)} className="text-sm"/></div><div><label className="text-[10px] text-dark-400 mb-1 block">Periode</label><select value={b.period||'monthly'} onChange={e=>upd(b.id,'period',e.target.value)} className="text-sm"><option value="weekly">Mingguan</option><option value="monthly">Bulanan</option><option value="custom">Custom</option></select></div><div><label className="text-[10px] text-dark-400 mb-1 block">Kategori Dipantau</label><div className="flex flex-wrap gap-1.5">{expCats.map(ec=>(<button key={ec.id} type="button" onClick={()=>toggleCategory(b.id,ec.id)} className={`px-2 py-1 rounded text-[10px] transition-all ${trackedCats.includes(ec.id)?'bg-blue-500/30 text-blue-300 border border-blue-500/50':'bg-dark-600 text-dark-400 border border-transparent'}`}>{ec.name}</button>))}</div></div></div>)})}<button onClick={simpan} disabled={busy} className={`w-full py-3.5 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Simpan'}</button></div></MW>);
 }
 
 function DebtM({close,save}){
     const[name,setName]=useState('');const[dtype,setDtype]=useState('hutang');const[amt,setAmt]=useState('');const[due,setDue]=useState('');const[note,setNote]=useState('');
-    const sub=e=>{e.preventDefault();if(!name.trim()||!amt)return;save({name:name.trim(),dtype,amount:parseFloat(amt),dueDate:due||null,note:note.trim()});close()};
-    return(<MW close={close} title="Tambah Hutang / Piutang"><form onSubmit={sub} className="space-y-4"><div className="flex gap-2 bg-dark-700 rounded-xl p-1"><button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang</button><button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang</button></div><div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div><button type="submit" className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600">Simpan</button></form></MW>);
+    const[busy,setBusy]=useState(false);
+    const sub=async e=>{
+        e.preventDefault();
+        if(!name.trim()||!amt||busy)return;
+        setBusy(true);
+        const ok=await save({name:name.trim(),dtype,amount:parseFloat(amt),dueDate:due||null,note:note.trim()});
+        setBusy(false);
+        if(ok!==false)close();
+    };
+    return(<MW close={close} title="Tambah Hutang / Piutang"><form onSubmit={sub} className="space-y-4"><div className="flex gap-2 bg-dark-700 rounded-xl p-1"><button type="button" onClick={()=>setDtype('hutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='hutang'?'bg-red-500 text-white':'text-dark-400'}`}>Hutang</button><button type="button" onClick={()=>setDtype('piutang')} className={`flex-1 py-2.5 rounded-lg text-sm font-medium ${dtype==='piutang'?'bg-green-500 text-white':'text-dark-400'}`}>Piutang</button></div><div><label className="text-xs text-dark-400 mb-1 block">Nama Orang / Entitas</label><input type="text" placeholder="Contoh: Budi, PayLater" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jumlah (Rp)</label><input type="number" placeholder="0" value={amt} onChange={e=>setAmt(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Jatuh Tempo (opsional)</label><input type="date" value={due} onChange={e=>setDue(e.target.value)}/></div><div><label className="text-xs text-dark-400 mb-1 block">Catatan</label><input type="text" placeholder="Keterangan tambahan" value={note} onChange={e=>setNote(e.target.value)}/></div><button type="submit" disabled={busy} className={`w-full py-3.5 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Simpan'}</button></form></MW>);
 }
 
 function TxnDetailM({txn,close,del,getCat,wallets}){
@@ -1177,24 +1662,30 @@ function TxnDetailM({txn,close,del,getCat,wallets}){
     </div></MW>);
 }
 
-function CatEditM({close,cats,save,type}){
-    const[local,setLocal]=useState(cats);const[nn,setNn]=useState('');
-    const add=()=>{if(!nn.trim())return;setLocal(p=>[...p,{id:genId(),name:nn.trim(),color:['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'][Math.floor(Math.random()*8)],type}]);setNn('')};
-    const del=id=>setLocal(p=>p.filter(c=>c.id!==id));
-    return(<MW close={close} title={`Edit Kategori ${type==='expense'?'Pengeluaran':'Pemasukan'}`}><div className="space-y-3">{local.map(c=>(<div key={c.id} className="flex items-center justify-between bg-dark-700 rounded-xl p-3"><div className="flex items-center gap-2"><CatBadge cat={c} size="sm"/><span className="text-sm">{c.name}</span></div><button onClick={()=>del(c.id)} className="text-dark-400"><I.Trash/></button></div>))}<div className="flex gap-2"><input type="text" placeholder="Nama kategori..." value={nn} onChange={e=>setNn(e.target.value)}/><button onClick={add} className="bg-blue-600 text-white px-4 rounded-lg text-sm">+</button></div><button onClick={()=>{save(local);close()}} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 mt-2">Simpan</button></div></MW>);
+function CatEditM({close,cats,catType,addCat,delCat}){
+    const[nn,setNn]=useState('');const[busy,setBusy]=useState(false);
+    const add=async()=>{if(!nn.trim()||busy)return;setBusy(true);const ok=await addCat(nn,catType);setBusy(false);if(ok)setNn('')};
+    return(<MW close={close} title={`Edit Kategori ${catType==='expense'?'Pengeluaran':'Pemasukan'}`}><div className="space-y-3">{cats.map(c=>(<div key={c.id} className="flex items-center justify-between bg-dark-700 rounded-xl p-3"><div className="flex items-center gap-2"><CatBadge cat={c} size="sm"/><span className="text-sm">{c.name}</span></div><button onClick={()=>delCat(c.id)} className="text-dark-400"><I.Trash/></button></div>))}<div className="flex gap-2"><input type="text" placeholder="Nama kategori..." value={nn} onChange={e=>setNn(e.target.value)}/><button onClick={add} disabled={busy} className="bg-blue-600 text-white px-4 rounded-lg text-sm disabled:opacity-50">{busy?'...':'+'}</button></div><button onClick={close} className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 mt-2">Selesai</button></div></MW>);
 }
 
 function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets }) {
     const [realCost, setRealCost] = useState(todo.budget.toString());
     const [walletId, setWalletId] = useState(wallets[0]?.id || '');
-    
-    const handleConfirm = (e) => {
+    const [busy, setBusy] = useState(false);
+
+    const handleConfirm = async (e) => {
         e.preventDefault();
-        completeWithExpense(todo.id, parseFloat(realCost) || 0, walletId);
+        if (busy) return;
+        setBusy(true);
+        await completeWithExpense(todo.id, parseFloat(realCost) || 0, walletId);
+        setBusy(false);
     };
-    
-    const handleSkip = () => {
-        skipTodoExpense(todo.id);
+
+    const handleSkip = async () => {
+        if (busy) return;
+        setBusy(true);
+        await skipExpense(todo.id);
+        setBusy(false);
     };
 
     return (
@@ -1213,230 +1704,10 @@ function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets })
                     </select>
                 </div>
                 <div className="flex gap-3 mt-4">
-                    <button type="button" onClick={handleSkip} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700">Lewati</button>
-                    <button type="submit" className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600">Catat Pengeluaran</button>
+                    <button type="button" onClick={handleSkip} disabled={busy} className="flex-1 py-3 rounded-xl font-semibold text-dark-300 bg-dark-700 disabled:opacity-50">Lewati</button>
+                    <button type="submit" disabled={busy} className={`flex-1 py-3 rounded-xl font-semibold text-white ${busy?'bg-dark-600 text-dark-400':'bg-blue-600'}`}>{busy?'Menyimpan...':'Catat Pengeluaran'}</button>
                 </div>
             </form>
-        </MW>
-    );
-}
-
-function P2PSync({ close }) {
-    const [step, setStep] = useState('menu');
-    const [status, setStatus] = useState('');
-    const [pc, setPc] = useState(null);
-    const [scanner, setScanner] = useState(null);
-    const [camError, setCamError] = useState(false);
-    const [pasteTxt, setPasteTxt] = useState('');
-
-    useEffect(() => {
-        return () => {
-            if (scanner) scanner.stop().catch(() => {});
-            if (pc) pc.close();
-        };
-    }, [scanner, pc]);
-
-    const waitForIce = (peerConnection) => {
-        return new Promise(resolve => {
-            if (peerConnection.iceGatheringState === 'complete') resolve();
-            else {
-                const check = () => {
-                    if (peerConnection.iceGatheringState === 'complete') {
-                        peerConnection.removeEventListener('icegatheringstatechange', check);
-                        resolve();
-                    }
-                };
-                peerConnection.addEventListener('icegatheringstatechange', check);
-            }
-        });
-    };
-
-    const startHost = async () => {
-        setStatus('Membuat koneksi...');
-        const newPc = new RTCPeerConnection();
-        const dc = newPc.createDataChannel('nata_sync');
-        
-        dc.onopen = () => {
-            setStatus('Mengirim data...');
-            const payload = {
-                nh_w: localStorage.getItem('nh_w'), nh_tx: localStorage.getItem('nh_tx'),
-                nh_bg: localStorage.getItem('nh_bg'), nh_n: localStorage.getItem('nh_n'),
-                nh_td: localStorage.getItem('nh_td'), nh_db: localStorage.getItem('nh_db'),
-                nh_ec: localStorage.getItem('nh_ec'), nh_ic: localStorage.getItem('nh_ic'),
-                nh_sk: localStorage.getItem('nh_sk')
-            };
-            const compressed = LZString.compressToUTF16(JSON.stringify(payload));
-            dc.send(compressed);
-            setStatus('✅ Data berhasil dikirim!');
-        };
-
-        const offer = await newPc.createOffer();
-        offer.sdp = mungeSdp(offer.sdp);
-        await newPc.setLocalDescription(offer);
-        await waitForIce(newPc);
-        
-        setPc(newPc);
-        setStep('host_qr');
-        setStatus('Scan QR ini dengan HP Baru (Pilih "Terima Data")');
-    };
-
-    const startGuest = () => {
-        setStep('guest_scan');
-        setCamError(false);
-        setStatus('Arahkan kamera ke QR Code di HP Lama...');
-        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
-        setTimeout(() => {
-            const html5QrCode = new Html5Qrcode("qr-reader");
-            setScanner(html5QrCode);
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                async (decodedText) => {
-                    await html5QrCode.stop();
-                    setScanner(null);
-                    processOffer(decodedText);
-                },
-                () => {}
-            ).catch(() => setCamError(true));
-        }, 300);
-    };
-
-    const processOffer = async (decodedText) => {
-        try {
-        setStatus('Memproses koneksi...');
-        const newPc = new RTCPeerConnection();
-        
-        newPc.ondatachannel = (event) => {
-            const dc = event.channel;
-            dc.onmessage = (e) => {
-                setStatus('Menerima data...');
-                const jsonStr = LZString.decompressFromUTF16(e.data);
-                const payload = JSON.parse(jsonStr);
-                
-                Object.keys(payload).forEach(key => {
-                    if (payload[key]) localStorage.setItem(key, payload[key]);
-                });
-                
-                setStatus('✅ Data berhasil diterima! Memuat ulang...');
-                setTimeout(() => window.location.reload(), 1500);
-            };
-        };
-
-        const offerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(decodedText));
-        await newPc.setRemoteDescription(offerSdp);
-        const answer = await newPc.createAnswer();
-        answer.sdp = mungeSdp(answer.sdp);
-        await newPc.setLocalDescription(answer);
-        await waitForIce(newPc);
-        
-        setPc(newPc);
-        setStep('guest_qr');
-        setStatus('Scan QR ini dengan HP Lama untuk menyelesaikan');
-        } catch (err) {
-            setStatus('❌ Teks SDP tidak valid. Pastikan salinan lengkap, lalu tempel lagi.');
-            setCamError(true);
-        }
-    };
-
-    const completeHandshake = () => {
-        setStep('host_scan');
-        setCamError(false);
-        setStatus('Arahkan kamera ke QR Code di HP Baru...');
-        if (typeof Html5Qrcode === 'undefined') { setCamError(true); return; }
-        setTimeout(() => {
-            const html5QrCode = new Html5Qrcode("qr-reader");
-            setScanner(html5QrCode);
-            html5QrCode.start(
-                { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                async (decodedText) => {
-                    await html5QrCode.stop();
-                    setScanner(null);
-                    const answerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(decodedText));
-                    await pc.setRemoteDescription(answerSdp);
-                    setStatus('Handshake berhasil! Mengirim data...');
-                },
-                () => {}
-            ).catch(() => setCamError(true));
-        }, 300);
-    };
-
-    const renderQR = (data) => {
-        const raw = typeof data === 'string' ? data : JSON.stringify(data);
-        try {
-            if (typeof qrcode !== 'function') throw new Error('Modul QR tidak termuat');
-            const compressed = LZString.compressToEncodedURIComponent(raw);
-            const qr = qrcode(0, 'L');
-            qr.addData(compressed);
-            qr.make();
-            if (qr.getModuleCount() > 120) throw new Error('Data QR terlalu padat untuk dipindai');
-            return <div className="flex justify-center my-4" dangerouslySetInnerHTML={{ __html: qr.createImgTag(4, 8) }} />;
-        } catch (e) {
-            const compressed = LZString.compressToEncodedURIComponent(raw);
-            return (
-                <div className="my-4 space-y-2">
-                    <p className="text-xs text-yellow-400 text-center">⚠️ QR otomatis gagal ({e.message}). Salin teks ini, kirim via WA/Telegram, lalu tempel di HP lain.</p>
-                    <textarea readOnly rows={6} value={compressed} className="text-[10px] leading-tight" onFocus={ev => ev.target.select()} />
-                    <button type="button" onClick={ev => { if (navigator.clipboard) navigator.clipboard.writeText(compressed).then(() => { ev.target.textContent = '✅ Tersalin!'; }).catch(() => {}); }} className="w-full py-2 rounded-lg bg-dark-600 text-xs font-medium">Salin Teks</button>
-                </div>
-            );
-        }
-    };
-
-    return (
-        <MW close={close} title="Sinkronisasi P2P">
-            <div className="space-y-4 text-center">
-                <p className="text-xs text-dark-400">Pindahkan data antar perangkat via Wi-Fi Lokal/Hotspot. 100% Offline & Privat.</p>
-                
-                {step === 'menu' && (
-                    <div className="space-y-3 mt-4">
-                        <button onClick={startHost} className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600">📤 Kirim Data (HP Lama)</button>
-                        <button onClick={startGuest} className="w-full py-3 rounded-xl font-semibold text-white bg-dark-700 border border-dark-600">📥 Terima Data (HP Baru)</button>
-                    </div>
-                )}
-
-                {step === 'host_qr' && (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        {renderQR(JSON.stringify(pc.localDescription))}
-                        <button onClick={completeHandshake} className="w-full py-3 rounded-xl font-semibold text-white bg-green-600 mt-4">Scan QR Jawaban (HP Baru)</button>
-                    </div>
-                )}
-
-                {step === 'guest_scan' && (
-                    camError ? <CamError onBack={() => { setCamError(false); setStep('menu'); }} onPaste={(txt) => { setCamError(false); processOffer(txt); }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
-                    </div>
-                    )
-                )}
-
-                {step === 'guest_qr' && (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-green-400">{status}</p>
-                        {renderQR(JSON.stringify(pc.localDescription))}
-                    </div>
-                )}
-
-                {step === 'host_scan' && (
-                    camError ? <CamError onBack={() => { setCamError(false); setStep('host_qr'); }} onPaste={async (txt) => {
-                        try {
-                            const answerSdp = JSON.parse(LZString.decompressFromEncodedURIComponent(txt));
-                            await pc.setRemoteDescription(answerSdp);
-                            setCamError(false);
-                            setStatus('Handshake berhasil! Mengirim data...');
-                        } catch (e2) { setStatus('❌ Teks jawaban tidak valid, coba lagi.'); }
-                    }} pasteValue={pasteTxt} setPaste={setPasteTxt} /> : (
-                    <div className="space-y-3">
-                        <p className="text-sm font-medium text-blue-400">{status}</p>
-                        <div id="qr-reader" className="w-full max-w-xs mx-auto rounded-xl overflow-hidden border-2 border-dark-600"></div>
-                    </div>
-                    )
-                )}
-                
-                <button onClick={close} className="w-full py-3 rounded-xl font-semibold text-dark-300 bg-dark-700 mt-4">Tutup</button>
-            </div>
         </MW>
     );
 }
@@ -1571,7 +1842,7 @@ function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, se
     );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+ReactDOM.createRoot(document.getElementById('root')).render(<Root/>);
 </script>
 </body>
 </html>
