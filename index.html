@@ -239,10 +239,37 @@ const parseReceipt = (text, expCats, learnedKw = {}) => {
 
 const fieldVal=f=>{if(!f)return null;if(f.value!==undefined&&f.value!==null)return f.value;if(f.data&&f.data.value!==undefined&&f.data.value!==null)return f.data.value;if(typeof f.data==='string'||typeof f.data==='number')return f.data;return null;};
 
-const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
+const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg, mindeeModel) => {
     apiKey = String(apiKey || '').trim();
     if (provider !== 'offline' && apiKey && navigator.onLine) {
         try {
+            // Qwen-VL: panggilan langsung (CORS diizinkan), sinkron
+            if (provider === 'qwen') {
+                onProg(10, 'Mengirim ke Qwen-VL...');
+                const b64 = await blobToB64(blob);
+                const rq = await fetch(QWEN_URL, {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: QWEN_MODEL, temperature: 0, messages: [{ role: 'user', content: [ { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b64 } }, { type: 'text', text: QWEN_PROMPT } ] }] }),
+                });
+                if (!rq.ok) throw new Error('Qwen error ' + rq.status);
+                const jq = await rq.json();
+                const txtq = (jq && jq.choices && jq.choices[0] && jq.choices[0].message && jq.choices[0].message.content) || '';
+                return parseQwenReceipt(txtq, expCats, learnedKw);
+            }
+            // Mindee API V2 (key md_...): wajib lewat Edge Function karena CORS browser
+            if (provider === 'mindee' && apiKey.startsWith('md_')) {
+                if (!String(mindeeModel || '').trim()) throw new Error('Model ID Mindee belum diisi di Pengaturan.');
+                onProg(10, 'Mengirim ke Mindee V2 (via Edge Function)...');
+                const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
+                const { data, error } = await sb.functions.invoke('mindee-ocr', { body: { api_key: apiKey, model_id: String(mindeeModel).trim(), file_base64: b64, filename: 'struk.jpg' } });
+                if (error) throw new Error('Edge Function mindee-ocr: ' + (error.message || error));
+                if (data && data.error) throw new Error(String(data.error).slice(0, 140));
+                const amount = Number(data && data.amount) || 0;
+                const dt = normDate(data && data.date) || getToday();
+                const note = String((data && data.supplier) || 'Scan struk').slice(0, 40);
+                return { amount: Math.round(amount), date: dt, note, category: guessCat(note + ' ' + JSON.stringify(data || {}), expCats, learnedKw) };
+            }
             const fd = new FormData();
             if (provider === 'taggun') {
                 onProg(10, 'Mengirim ke Taggun...');
@@ -291,6 +318,32 @@ const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYm
 const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
 
 const CAT_COLORS=['#f59e0b','#3b82f6','#8b5cf6','#ef4444','#ec4899','#10b981','#06b6d4','#f97316'];
+
+// ===== Provider OCR Qwen-VL (Model Studio / DashScope international) =====
+// Sinkron, satu endpoint, tanpa model_id/polling. Ganti model di sini bila perlu.
+const QWEN_URL='https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+const QWEN_MODEL='qwen3-vl-flash';
+// "Pelatihan" praktis untuk tugas ini = kalibrasi prompt: JSON ketat, suhu 0,
+// dan aturan eksplisit total-vs-tunai-vs-kembalian untuk struk Indonesia.
+const QWEN_PROMPT=[
+    'Kamu mesin ekstraksi struk belanja Indonesia untuk aplikasi keuangan.',
+    'Baca gambar struk lalu jawab HANYA dengan satu objek JSON valid tanpa teks lain, format:',
+    '{"total":<number>,"date":"YYYY-MM-DD","merchant":"<nama toko>"}',
+    'Aturan: total = GRAND TOTAL / TOTAL BAYAR final dalam rupiah sebagai number murni tanpa titik ribuan (contoh 48500);',
+    'jangan pakai subtotal, jumlah tunai, atau kembalian sebagai total;',
+    'date = tanggal transaksi dikonversi ke YYYY-MM-DD, pakai string "null" jika tidak terbaca;',
+    'merchant = nama toko/restoran, pakai string "null" jika tidak terbaca.',
+].join(' ');
+const blobToB64=blob=>new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]||'');fr.onerror=rej;fr.readAsDataURL(blob);});
+const parseQwenReceipt=(txt,expCats,learnedKw)=>{
+    const raw=String((txt||'').match(/\{[\s\S]*\}/)?.[0]||'');
+    let pj={};try{pj=JSON.parse(raw)}catch(e){pj={}}
+    const clean=v=>(v===null||v==='null'||v===undefined)?'':String(v);
+    const amount=Math.round(Number(clean(pj.total).replace(/[^\d.-]/g,''))||0);
+    const dt=normDate(clean(pj.date))||getToday();
+    const note=(clean(pj.merchant)||'Scan struk').slice(0,40);
+    return {amount,date:dt,note,category:guessCat(note+' '+raw,expCats,learnedKw)};
+};
 
 // Pengaturan KHUSUS PERANGKAT (bukan data pengguna) tetap di localStorage:
 // pilihan provider OCR, API key OCR, memori kata kunci OCR, dan milestone streak yang sudah dirayakan.
@@ -688,6 +741,7 @@ function App({user,toast}){
     // Pengaturan khusus perangkat (bukan data pengguna)
     const[ocrProvider,setOcrProvider]=usePref('nh_ocrp','offline');
     const[ocrKey,setOcrKey]=usePref('nh_ocrk','');
+    const[mindeeModel,setMindeeModel]=usePref('nh_mdee_model','');
     const[learnedKw,setLearnedKw]=usePref('nh_lkw',{});
     const[celebratedAt,setCelebratedAt]=usePref('nh_celebrated',[]);
     const[pageKey,setPageKey]=useState(0);
@@ -1056,7 +1110,7 @@ function App({user,toast}){
                 {tab==='home'&&<Dash wallets={wallets} totalBal={totalBal} mIncome={mIncome} mExpense={mExpense} remain={remain} todayExp={todayExp} todayTxns={todayTxns} todos={todos} budgets={budgets} catSpend={catSpend} streak={streak} allCats={allCats} openM={openM} loading={loading}/>}
                 {tab==='notes'&&<NotesMod notes={notes} todos={todos} addNote={addNote} updNote={updNote} delNote={delNote} addTodo={addTodo} togTodo={togTodo} delTodo={delTodo} openM={openM} loading={loading}/>}
                 {tab==='finance'&&<FinMod wallets={wallets} txns={txns} mTxns={mTxns} budgets={budgets} catSpend={catSpend} mIncome={mIncome} mExpense={mExpense} debts={debts} totalBal={totalBal} allCats={allCats} getCat={getCat} addDebt={addDebt} togDebt={togDebt} delDebt={delDebt} delTxn={delTxn} openM={openM} loading={loading}/>}
-                {tab==='settings'&&<SetMod wallets={wallets} txns={txns} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} addCat={addCat} delCat={delCat} streak={streak} user={user} toast={toast} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey} onRefresh={boot}/>}
+                {tab==='settings'&&<SetMod wallets={wallets} txns={txns} notes={notes} todos={todos} debts={debts} expCats={expCats} incCats={incCats} addCat={addCat} delCat={delCat} streak={streak} user={user} toast={toast} ocrProvider={ocrProvider} setOcrProvider={setOcrProvider} ocrKey={ocrKey} setOcrKey={setOcrKey} mindeeModel={mindeeModel} setMindeeModel={setMindeeModel} onRefresh={boot}/>}
             </div>
 
             <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-dark-800/60 backdrop-blur-lg border-t border-white/10 px-2 pb-2 pt-1 z-40">
@@ -1072,7 +1126,7 @@ function App({user,toast}){
             </nav>
 
             {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='scanReceipt'&&<ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw} toast={toast}/>}
+            {modal==='scanReceipt'&&<ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw} toast={toast} mindeeModel={mindeeModel}/>}
             {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
             {modal==='addNote'&&<NoteM close={closeM} save={mData&&mData.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
             {modal==='addWallet'&&<WalletM close={closeM} save={addWallet}/>}
@@ -1427,7 +1481,7 @@ function TodoItem({ t, tog }) {
     );
 }
 
-function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,streak,user,toast,ocrProvider,setOcrProvider,ocrKey,setOcrKey,onRefresh}){
+function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,streak,user,toast,ocrProvider,setOcrProvider,ocrKey,setOcrKey,mindeeModel,setMindeeModel,onRefresh}){
     const[isInstalled,setIsInstalled]=useState(false);
     const[busy,setBusy]=useState(false);
     const[testBusy,setTestBusy]=useState(false);
@@ -1467,6 +1521,34 @@ function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,st
         setTestBusy(true);setTestRes('');
         try{
             const blob=await new Promise(res=>{const c=document.createElement('canvas');c.width=8;c.height=8;c.toBlob(b=>res(b),'image/jpeg',0.9);});
+            // Qwen-VL: uji autentikasi + kuota dengan gambar 8x8
+            if(ocrProvider==='qwen'){
+                const b64=await blobToB64(blob);
+                const rq=await fetch(QWEN_URL,{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:QWEN_MODEL,temperature:0,messages:[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/jpeg;base64,'+b64}},{type:'text',text:'Balas HANYA dengan JSON: {"total":0,"date":"null","merchant":"null"}'}]}]})});
+                if(rq.ok)setTestRes('\u2705 Key Qwen valid! Terhubung ke model '+QWEN_MODEL+'.');
+                else if(rq.status===401)setTestRes('\u274c 401: key Qwen salah. Salin ulang tanpa spasi dari console Model Studio.');
+                else if(rq.status===403){const tq=await rq.text();setTestRes(/quota|balance|billing|free/i.test(tq)?'\u274c 403: kuota/saldo Model Studio belum aktif untuk key ini.':'\u274c 403: '+tq.slice(0,110));}
+                else setTestRes('\u274c HTTP '+rq.status+': '+(await rq.text()).slice(0,120));
+                setTestBusy(false);return;
+            }
+            // Mindee V2 (md_): uji lewat Edge Function (read-only-ish, file 8x8)
+            if(ocrProvider==='mindee'&&key.startsWith('md_')){
+                if(!String(mindeeModel||'').trim()){setTestRes('\u274c Isi dulu Model ID Mindee (kolom di bawah key).');setTestBusy(false);return;}
+                const b64=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]||'');fr.onerror=rej;fr.readAsDataURL(blob);});
+                const {data,error}=await sb.functions.invoke('mindee-ocr',{body:{api_key:key,model_id:String(mindeeModel).trim(),file_base64:b64,filename:'tes.jpg'}});
+                if(error){
+                    const m=String(error.message||error);
+                    setTestRes(/not found|deploy|non-200/i.test(m)?'\u274c Edge Function "mindee-ocr" belum di-deploy / tidak merespons. Lihat README_MIGRASI.md bagian Mindee V2.':'\u274c Edge Function: '+m.slice(0,120));
+                }else if(data&&data.ok){
+                    setTestRes('\u2705 Key + Model ID valid! Terhubung ke Mindee V2.');
+                }else if(data&&data.error){
+                    const e2=String(data.error);
+                    setTestRes(/401/.test(e2)?'\u274c Key ditolak Mindee (401). Salin ulang key md_ tanpa spasi.':'\u274c '+e2.slice(0,140));
+                }else{
+                    setTestRes('\u274c Respons Edge Function tidak dikenal.');
+                }
+                setTestBusy(false);return;
+            }
             const fd=new FormData();let r;
             if(ocrProvider==='taggun'){
                 fd.append('file',blob,'struk.jpg');fd.append('incognito','true');
@@ -1516,11 +1598,21 @@ function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,st
                     <option value="offline">Offline \u2014 Tesseract.js (gratis)</option>
                     <option value="taggun">Taggun API (online, akurasi tinggi)</option>
                     <option value="mindee">Mindee API (online)</option>
+                    <option value="qwen">Qwen-VL API (online, kuota gratis awal)</option>
                 </select>
                 {ocrProvider!=='offline'&&(
                     <div className="space-y-2">
                         <input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value.replace(/\s+/g,''))}/>
                         <button type="button" onClick={testKey} disabled={testBusy} className="w-full py-2 rounded-xl bg-dark-600 text-xs font-medium text-dark-300 ch disabled:opacity-50">{testBusy?'Menguji koneksi...':'Tes Koneksi API Key'}</button>
+                        {ocrProvider==='qwen'&&(
+                            <p className="text-[10px] text-dark-500 leading-relaxed">Key Qwen: console Alibaba Cloud Model Studio (international) \u2192 API-KEY \u2192 Create API Key. Akun baru mendapat kuota gratis (region Singapore). Model default: {QWEN_MODEL} \u2014 ganti di konstanta QWEN_MODEL bila ingin akurasi lebih tinggi.</p>
+                        )}
+                        {ocrProvider==='mindee'&&String(ocrKey||'').trim().startsWith('md_')&&(
+                            <div className="space-y-1">
+                                <input type="text" placeholder="Model ID Mindee (uuid) dari dashboard" value={mindeeModel} onChange={e=>setMindeeModel(e.target.value.replace(/\s+/g,''))}/>
+                                <p className="text-[10px] text-dark-500 leading-relaxed">Key berawalan md_ = Mindee API V2. Setup sekali: (1) dashboard Mindee \u2192 Models \u2192 buat model dari katalog "Receipt" \u2192 Model Settings \u2192 salin Model ID ke kolom ini; (2) deploy Edge Function "mindee-ocr" di Supabase-mu (kode di supabase/functions/mindee-ocr/index.ts, langkah di README) \u2014 browser diblokir CORS untuk memanggil api-v2.mindee.net langsung.</p>
+                            </div>
+                        )}
                         {testRes!==''&&<p className={`text-[11px] rounded-xl p-2.5 border leading-relaxed ${testRes.charAt(0)==='\u2705'?'text-green-300 bg-green-500/10 border-green-500/30':'text-red-300 bg-red-500/10 border-red-500/30'}`}>{testRes}</p>}
                     </div>
                 )}
@@ -1753,7 +1845,7 @@ function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets })
     );
 }
 
-function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw, toast}){
+function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw, toast, mindeeModel}){
     const[step,setStep]=useState('menu');
     const[prog,setProg]=useState(0);
     const[status,setStatus]=useState('');
@@ -1786,7 +1878,7 @@ function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, se
         stopCam();setErr('');setStep('processing');setProg(0);
         setStatus(ocrProvider!=='offline'&&ocrKey&&navigator.onLine?'Mengirim gambar ke API OCR...':'Menyiapkan OCR offline...');
         try{
-            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l){setStatus(l);if(/beralih ke OCR offline/i.test(l)&&toast)toast(l,'info');}});
+            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l){setStatus(l);if(/beralih ke OCR offline/i.test(l)&&toast)toast(l,'info');}},mindeeModel);
             setAmt(String(r.amount||''));setNote(r.note||'');setDate(r.date||getToday());setCat(r.category||'');
             setStep('confirm');
         }catch(e){
@@ -1839,7 +1931,7 @@ function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, se
                                 <button onClick={()=>fileRef.current&&fileRef.current.click()} className="bg-dark-700 rounded-2xl p-5 flex flex-col items-center gap-2 ch"><div className="w-10 h-10 rounded-xl bg-dark-600 flex items-center justify-center text-dark-300"><I.DL/></div><span className="text-sm font-medium">Dari Galeri</span></button>
                             </div>
                         )}
-                        <p className="text-[10px] text-dark-500 text-center">Mode aktif: {ocrProvider==='offline'?'Offline (Tesseract.js)':ocrProvider==='taggun'?'Taggun API':'Mindee API'}{ocrProvider!=='offline'&&' — otomatis fallback ke offline jika gagal'}. Ubah di Pengaturan.</p>
+                        <p className="text-[10px] text-dark-500 text-center">Mode aktif: {ocrProvider==='offline'?'Offline (Tesseract.js)':ocrProvider==='taggun'?'Taggun API':ocrProvider==='qwen'?'Qwen-VL API':'Mindee API'}{ocrProvider!=='offline'&&' — otomatis fallback ke offline jika gagal'}. Ubah di Pengaturan.</p>
                     </div>
                 )}
                 {step==='camera'&&(
