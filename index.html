@@ -240,6 +240,7 @@ const parseReceipt = (text, expCats, learnedKw = {}) => {
 const fieldVal=f=>{if(!f)return null;if(f.value!==undefined&&f.value!==null)return f.value;if(f.data&&f.data.value!==undefined&&f.data.value!==null)return f.data.value;if(typeof f.data==='string'||typeof f.data==='number')return f.data;return null;};
 
 const runOcr = async (blob, provider, apiKey, expCats, learnedKw, onProg) => {
+    apiKey = String(apiKey || '').trim();
     if (provider !== 'offline' && apiKey && navigator.onLine) {
         try {
             const fd = new FormData();
@@ -558,7 +559,12 @@ const AUTH_ERR_MAP={
     'For security purposes, you can only request this after 60 seconds.':'Tunggu sebentar sebelum meminta ulang.',
     'Email rate limit exceeded':'Terlalu banyak percobaan. Coba lagi beberapa menit.',
 };
-const authErr=m=>AUTH_ERR_MAP[m]||m;
+const authErr=m=>{
+    const s=String(m||'');
+    if(AUTH_ERR_MAP[s])return AUTH_ERR_MAP[s];
+    const k=Object.keys(AUTH_ERR_MAP).find(key=>s.toLowerCase().includes(key.toLowerCase()));
+    return k?AUTH_ERR_MAP[k]:s;
+};
 
 function AuthScreen({toast}){
     const[mode,setMode]=useState('login'); // login | register | forgot
@@ -1066,7 +1072,7 @@ function App({user,toast}){
             </nav>
 
             {modal==='quickAdd'&&<QuickAddM close={closeM} openM={openM}/>}
-            {modal==='scanReceipt'&&<ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw}/>}
+            {modal==='scanReceipt'&&<ScanReceiptM close={closeM} openM={openM} expCats={expCats} ocrProvider={ocrProvider} ocrKey={ocrKey} learnedKw={learnedKw} setLearnedKw={setLearnedKw} toast={toast}/>}
             {modal==='addTxn'&&<TxnM close={closeM} save={saveTxn} wallets={wallets} expCats={expCats} incCats={incCats} ed={mData}/>}
             {modal==='addNote'&&<NoteM close={closeM} save={mData&&mData.id?n=>updNote(mData.id,n):addNote} ed={mData}/>}
             {modal==='addWallet'&&<WalletM close={closeM} save={addWallet}/>}
@@ -1424,6 +1430,8 @@ function TodoItem({ t, tog }) {
 function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,streak,user,toast,ocrProvider,setOcrProvider,ocrKey,setOcrKey,onRefresh}){
     const[isInstalled,setIsInstalled]=useState(false);
     const[busy,setBusy]=useState(false);
+    const[testBusy,setTestBusy]=useState(false);
+    const[testRes,setTestRes]=useState('');
     useEffect(()=>{if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone){setIsInstalled(true)}},[]);
     const handleInstall=async()=>{
         if(window.deferredPrompt){window.deferredPrompt.prompt();const{outcome}=await window.deferredPrompt.userChoice;window.deferredPrompt=null;}
@@ -1451,6 +1459,33 @@ function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,st
         const csv='\uFEFF'+rows.map(r=>r.map(esc).join(';')).join('\r\n');
         const b=new Blob([csv],{type:'text/csv;charset=utf-8'});
         const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`natahidup-laporan-${getToday()}.csv`;a.click();URL.revokeObjectURL(u);
+    };
+    // Uji API key dengan gambar kecil supaya kegagalan tidak lagi silent
+    const testKey=async()=>{
+        const key=String(ocrKey||'').trim();
+        if(!key){setTestRes('Isi / tempel API key dulu.');return;}
+        setTestBusy(true);setTestRes('');
+        try{
+            const blob=await new Promise(res=>{const c=document.createElement('canvas');c.width=8;c.height=8;c.toBlob(b=>res(b),'image/jpeg',0.9);});
+            const fd=new FormData();let r;
+            if(ocrProvider==='taggun'){
+                fd.append('file',blob,'struk.jpg');fd.append('incognito','true');
+                r=await fetch('https://api.taggun.io/api/receipt/v1/scan',{method:'POST',headers:{apikey:key},body:fd});
+            }else{
+                fd.append('document',blob,'struk.jpg');
+                r=await fetch('https://api.mindee.net/v1/products/mindee/expense_receipts/v5/predict',{method:'POST',headers:{Authorization:'Token '+key},body:fd});
+            }
+            const prov=ocrProvider==='taggun'?'Taggun':'Mindee';
+            if(r.ok||r.status===201)setTestRes('\u2705 Key valid! Terhubung ke '+prov+'.');
+            else if(r.status===400)setTestRes('\u2705 Auth lolos (key valid). File tes 8x8 px ditolak provider \u2014 wajar, struk asli akan diproses.');
+            else if(r.status===401||r.status===403)setTestRes('\u274c Ditolak (401/403): key salah, terpotong, atau belum aktif. Salin ulang seluruh key tanpa spasi.');
+            else if(r.status===402)setTestRes('\u274c 402: plan/kuota provider tidak aktif untuk key ini.');
+            else if(r.status===429)setTestRes('\u274c 429: rate limit provider \u2014 coba lagi nanti.');
+            else setTestRes('\u274c HTTP '+r.status+': '+(await r.text()).slice(0,120));
+        }catch(e){
+            setTestRes('\u274c Tidak bisa menghubungi provider: '+errMsg(e));
+        }
+        setTestBusy(false);
     };
     const signOut=async()=>{if(confirm('Keluar dari akun ini?'))await sb.auth.signOut();};
     return(
@@ -1482,7 +1517,13 @@ function SetMod({wallets,txns,notes,todos,debts,expCats,incCats,addCat,delCat,st
                     <option value="taggun">Taggun API (online, akurasi tinggi)</option>
                     <option value="mindee">Mindee API (online)</option>
                 </select>
-                {ocrProvider!=='offline'&&(<input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value)}/>)}
+                {ocrProvider!=='offline'&&(
+                    <div className="space-y-2">
+                        <input type="password" placeholder="Masukkan API key..." value={ocrKey} onChange={e=>setOcrKey(e.target.value.replace(/\s+/g,''))}/>
+                        <button type="button" onClick={testKey} disabled={testBusy} className="w-full py-2 rounded-xl bg-dark-600 text-xs font-medium text-dark-300 ch disabled:opacity-50">{testBusy?'Menguji koneksi...':'Tes Koneksi API Key'}</button>
+                        {testRes!==''&&<p className={`text-[11px] rounded-xl p-2.5 border leading-relaxed ${testRes.charAt(0)==='\u2705'?'text-green-300 bg-green-500/10 border-green-500/30':'text-red-300 bg-red-500/10 border-red-500/30'}`}>{testRes}</p>}
+                    </div>
+                )}
                 <p className="text-[10px] text-dark-500">{ocrProvider==='offline'?'Model bahasa (~5 MB) diunduh sekali saat pertama dipakai, lalu tersimpan di perangkat.':'API key hanya disimpan di perangkat ini dan dikirim langsung ke provider. Jika API gagal, otomatis fallback ke OCR offline.'}</p>
             </div>
             <div className="bg-dark-700 rounded-2xl p-4 space-y-3">
@@ -1712,7 +1753,7 @@ function TodoBudgetM({ close, todo, completeWithExpense, skipExpense, wallets })
     );
 }
 
-function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw}){
+function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, setLearnedKw, toast}){
     const[step,setStep]=useState('menu');
     const[prog,setProg]=useState(0);
     const[status,setStatus]=useState('');
@@ -1745,7 +1786,7 @@ function ScanReceiptM({close, openM, expCats, ocrProvider, ocrKey, learnedKw, se
         stopCam();setErr('');setStep('processing');setProg(0);
         setStatus(ocrProvider!=='offline'&&ocrKey&&navigator.onLine?'Mengirim gambar ke API OCR...':'Menyiapkan OCR offline...');
         try{
-            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l)setStatus(l);});
+            const r=await runOcr(blob,ocrProvider,ocrKey,expCats,learnedKw,(p,l)=>{if(p!==null)setProg(p);if(l){setStatus(l);if(/beralih ke OCR offline/i.test(l)&&toast)toast(l,'info');}});
             setAmt(String(r.amount||''));setNote(r.note||'');setDate(r.date||getToday());setCat(r.category||'');
             setStep('confirm');
         }catch(e){
