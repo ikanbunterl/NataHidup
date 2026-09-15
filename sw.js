@@ -1,32 +1,90 @@
-// NataHidup v7 — Service Worker (Online Mode / Supabase)
-// Strategi: aset same-origin di-cache (app shell), SEMUA request API / non-GET diteruskan ke jaringan.
-const CACHE_NAME = 'natahidup-v7';
-const urlsToCache = [
+/* ============================================================
+   NataHidup V2 — Service Worker
+   Strategi:
+   - Aset aplikasi (same-origin): pre-cache saat install,
+     cache-first + revalidasi di latar belakang.
+   - CDN (React, Babel, Supabase, Tesseract, font):
+     stale-while-revalidate → app tetap bisa dibuka offline
+     setelah sekali dimuat.
+   - Request API (Supabase REST/Auth) & non-GET: selalu jaringan.
+   ============================================================ */
+const CACHE_NAME = 'natahidup-v2.0.0';
+const CDN_CACHE = 'natahidup-v2-cdn';
+
+const APP_SHELL = [
   './',
   './index.html',
-  './manifest.json'
+  './manifest.json',
+  './css/themes.css',
+  './css/base.css',
+  './css/components.css',
+  './js/config.js',
+  './js/utils.js',
+  './js/theme.js',
+  './js/db.js',
+  './js/ocr.js',
+  './js/icons.jsx',
+  './js/mascots.jsx',
+  './js/ui.jsx',
+  './js/modals/quickadd.jsx',
+  './js/modals/txn.jsx',
+  './js/modals/scan.jsx',
+  './js/modals/note.jsx',
+  './js/modals/wallet.jsx',
+  './js/modals/budget.jsx',
+  './js/modals/debt.jsx',
+  './js/modals/txndetail.jsx',
+  './js/modals/todobudget.jsx',
+  './js/screens/auth.jsx',
+  './js/screens/home.jsx',
+  './js/screens/finance.jsx',
+  './js/screens/notes.jsx',
+  './js/screens/settings.jsx',
+  './js/app.jsx',
 ];
 
-self.addEventListener('install', event => {
+const CDN_HOSTS = [
+  'unpkg.com',
+  'cdn.jsdelivr.net',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+];
+const isApiRequest = (url) => url.hostname.endsWith('.supabase.co');
+
+self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .catch((err) => console.warn('Pre-cache sebagian gagal:', err))
   );
   self.skipWaiting();
 });
 
-self.addEventListener('fetch', event => {
-  // Hanya intercept GET same-origin (aset UI). Request API & non-GET langsung ke jaringan.
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+self.addEventListener('activate', (event) => {
+  const whitelist = [CACHE_NAME, CDN_CACHE];
+  event.waitUntil(
+    caches.keys()
+      .then((names) => Promise.all(names.map((n) => (whitelist.includes(n) ? null : caches.delete(n)))))
+      .then(() => self.clients.claim())
+  );
+});
 
-  // Navigasi: network-first supaya versi terbaru selalu diambil, fallback ke cache saat offline
-  if (event.request.mode === 'navigate') {
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return; // mutasi data selalu ke jaringan
+
+  const url = new URL(request.url);
+
+  // Request API Supabase: jaringan murni (data harus segar)
+  if (isApiRequest(url)) return;
+
+  // Navigasi: network-first, fallback cache saat offline
+  if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request)
-        .then(resp => {
+      fetch(request)
+        .then((resp) => {
           const copy = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put('./index.html', copy));
+          caches.open(CACHE_NAME).then((c) => c.put('./index.html', copy));
           return resp;
         })
         .catch(() => caches.match('./index.html'))
@@ -34,30 +92,38 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Aset statis same-origin: cache-first dengan penulisan ulang cache
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached;
-      return fetch(event.request).then(resp => {
-        if (resp && resp.ok) {
-          const copy = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(event.request, copy));
-        }
-        return resp;
-      });
-    })
-  );
-});
-
-self.addEventListener('activate', event => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then(cacheNames =>
-      Promise.all(
-        cacheNames.map(cacheName => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) return caches.delete(cacheName);
+  // CDN pihak ketiga: stale-while-revalidate (mendukung mode offline)
+  if (url.origin !== self.location.origin) {
+    if (!CDN_HOSTS.includes(url.hostname)) return;
+    event.respondWith(
+      caches.open(CDN_CACHE).then((cache) =>
+        cache.match(request).then((cached) => {
+          const fetched = fetch(request)
+            .then((resp) => {
+              if (resp && (resp.ok || resp.type === 'opaque')) cache.put(request, resp.clone());
+              return resp;
+            })
+            .catch(() => cached);
+          return cached || fetched;
         })
       )
-    ).then(() => self.clients.claim())
+    );
+    return;
+  }
+
+  // Aset same-origin: cache-first + revalidasi latar belakang
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const fetched = fetch(request)
+        .then((resp) => {
+          if (resp && resp.ok) {
+            const copy = resp.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(request, copy));
+          }
+          return resp;
+        })
+        .catch(() => cached);
+      return cached || fetched;
+    })
   );
 });

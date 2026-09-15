@@ -1,0 +1,224 @@
+/* ============================================================
+   NataHidup V2 — Tema dinamis (CSS variables)
+   Setiap tema mendefinisikan token warna lengkap; komponen hanya
+   memakai var(--...) sehingga kontras teks selalu terjaga.
+   Tema gelap  : midnight, ocean, forest, sunset
+   Tema terang : dawn, sakura
+   ============================================================ */
+
+/* ---------- Midnight (default) ---------- */
+:root,
+[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #0a0e1c;
+  --bg2: #101736;
+  --surface: #141a30;
+  --surface2: #1c2440;
+  --surface3: #253054;
+  --input-bg: #10162a;
+  --text: #eef1fb;
+  --dim: #9aa3c4;
+  --faint: #5d668a;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --accent: #6d7cff;
+  --accent2: #9d6bff;
+  --accent-soft: rgba(109, 124, 255, 0.14);
+  --on-accent: #ffffff;
+  --green: #3ddc97;
+  --green-soft: rgba(61, 220, 151, 0.13);
+  --red: #ff7a8a;
+  --red-soft: rgba(255, 122, 138, 0.13);
+  --amber: #ffc861;
+  --amber-soft: rgba(255, 200, 97, 0.13);
+  --blue: #6db3ff;
+  --blue-soft: rgba(109, 179, 255, 0.13);
+  --hero: linear-gradient(135deg, #4f46e5 0%, #7c3aed 55%, #9333ea 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.72);
+  --hero-glow: rgba(124, 58, 237, 0.35);
+  --nav-bg: rgba(14, 18, 38, 0.82);
+  --sheet-bg: #121830;
+  --shadow: 0 12px 32px rgba(2, 6, 23, 0.5);
+  --overlay: rgba(4, 7, 18, 0.62);
+}
+
+/* ---------- Ocean ---------- */
+[data-theme="ocean"] {
+  color-scheme: dark;
+  --bg: #071120;
+  --bg2: #0b1c33;
+  --surface: #0e1f38;
+  --surface2: #15294a;
+  --surface3: #1d365e;
+  --input-bg: #0a1729;
+  --text: #e8f2fc;
+  --dim: #93a9c6;
+  --faint: #56708f;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --accent: #38bdf8;
+  --accent2: #6366f1;
+  --accent-soft: rgba(56, 189, 248, 0.14);
+  --on-accent: #04121f;
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.13);
+  --red: #fb7185;
+  --red-soft: rgba(251, 113, 133, 0.13);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.13);
+  --blue: #7dd3fc;
+  --blue-soft: rgba(125, 211, 252, 0.13);
+  --hero: linear-gradient(135deg, #0369a1 0%, #0284c7 50%, #4f46e5 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.75);
+  --hero-glow: rgba(2, 132, 199, 0.35);
+  --nav-bg: rgba(8, 19, 36, 0.82);
+  --sheet-bg: #0c1a30;
+  --shadow: 0 12px 32px rgba(1, 8, 20, 0.55);
+  --overlay: rgba(3, 9, 20, 0.62);
+}
+
+/* ---------- Forest ---------- */
+[data-theme="forest"] {
+  color-scheme: dark;
+  --bg: #08120d;
+  --bg2: #0d1f16;
+  --surface: #10241a;
+  --surface2: #163124;
+  --surface3: #1e4030;
+  --input-bg: #0c1c14;
+  --text: #e9f5ee;
+  --dim: #94b3a1;
+  --faint: #587a66;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --accent: #34d399;
+  --accent2: #a3e635;
+  --accent-soft: rgba(52, 211, 153, 0.14);
+  --on-accent: #04140c;
+  --green: #4ade80;
+  --green-soft: rgba(74, 222, 128, 0.13);
+  --red: #fb7185;
+  --red-soft: rgba(251, 113, 133, 0.13);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.13);
+  --blue: #5eead4;
+  --blue-soft: rgba(94, 234, 212, 0.13);
+  --hero: linear-gradient(135deg, #047857 0%, #059669 50%, #0d9488 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.75);
+  --hero-glow: rgba(5, 150, 105, 0.35);
+  --nav-bg: rgba(9, 22, 16, 0.82);
+  --sheet-bg: #0e2016;
+  --shadow: 0 12px 32px rgba(1, 12, 7, 0.55);
+  --overlay: rgba(3, 12, 8, 0.62);
+}
+
+/* ---------- Sunset ---------- */
+[data-theme="sunset"] {
+  color-scheme: dark;
+  --bg: #160c10;
+  --bg2: #241219;
+  --surface: #241419;
+  --surface2: #331c22;
+  --surface3: #45262d;
+  --input-bg: #1c1014;
+  --text: #fbeef0;
+  --dim: #c3a0a7;
+  --faint: #8a666e;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --accent: #fb7185;
+  --accent2: #f97316;
+  --accent-soft: rgba(251, 113, 133, 0.14);
+  --on-accent: #26060c;
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.13);
+  --red: #ff8b9b;
+  --red-soft: rgba(255, 139, 155, 0.16);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.13);
+  --blue: #93c5fd;
+  --blue-soft: rgba(147, 197, 253, 0.13);
+  --hero: linear-gradient(135deg, #ea580c 0%, #e11d48 60%, #be185d 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.78);
+  --hero-glow: rgba(225, 29, 72, 0.35);
+  --nav-bg: rgba(26, 13, 18, 0.82);
+  --sheet-bg: #1e1116;
+  --shadow: 0 12px 32px rgba(15, 4, 8, 0.55);
+  --overlay: rgba(14, 5, 8, 0.62);
+}
+
+/* ---------- Dawn (terang) ---------- */
+[data-theme="dawn"] {
+  color-scheme: light;
+  --bg: #f4f6fb;
+  --bg2: #e9edf8;
+  --surface: #ffffff;
+  --surface2: #f0f3fa;
+  --surface3: #e4e9f5;
+  --input-bg: #f4f6fb;
+  --text: #1c2338;
+  --dim: #5b6478;
+  --faint: #98a0b3;
+  --border: rgba(20, 30, 60, 0.09);
+  --border-strong: rgba(20, 30, 60, 0.18);
+  --accent: #5b5fe9;
+  --accent2: #8b5cf6;
+  --accent-soft: rgba(91, 95, 233, 0.1);
+  --on-accent: #ffffff;
+  --green: #0f9d63;
+  --green-soft: rgba(15, 157, 99, 0.1);
+  --red: #dc3648;
+  --red-soft: rgba(220, 54, 72, 0.09);
+  --amber: #b97e06;
+  --amber-soft: rgba(185, 126, 6, 0.11);
+  --blue: #226fdd;
+  --blue-soft: rgba(34, 111, 221, 0.09);
+  --hero: linear-gradient(135deg, #6366f1 0%, #7c5cf0 55%, #9333ea 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.78);
+  --hero-glow: rgba(124, 92, 240, 0.28);
+  --nav-bg: rgba(255, 255, 255, 0.86);
+  --sheet-bg: #ffffff;
+  --shadow: 0 10px 28px rgba(30, 41, 82, 0.12);
+  --overlay: rgba(23, 30, 54, 0.4);
+}
+
+/* ---------- Sakura (terang) ---------- */
+[data-theme="sakura"] {
+  color-scheme: light;
+  --bg: #fdf5f8;
+  --bg2: #fbe9f0;
+  --surface: #ffffff;
+  --surface2: #fcf0f5;
+  --surface3: #f7e2ec;
+  --input-bg: #fdf3f7;
+  --text: #37212e;
+  --dim: #7d5c6d;
+  --faint: #b28d9f;
+  --border: rgba(90, 30, 60, 0.09);
+  --border-strong: rgba(90, 30, 60, 0.18);
+  --accent: #ec4899;
+  --accent2: #c084fc;
+  --accent-soft: rgba(236, 72, 153, 0.1);
+  --on-accent: #ffffff;
+  --green: #0f9d63;
+  --green-soft: rgba(15, 157, 99, 0.1);
+  --red: #dc3648;
+  --red-soft: rgba(220, 54, 72, 0.09);
+  --amber: #b97e06;
+  --amber-soft: rgba(185, 126, 6, 0.11);
+  --blue: #7c5cf0;
+  --blue-soft: rgba(124, 92, 240, 0.09);
+  --hero: linear-gradient(135deg, #f472b6 0%, #d946ef 55%, #a855f7 100%);
+  --hero-text: #ffffff;
+  --hero-dim: rgba(255, 255, 255, 0.8);
+  --hero-glow: rgba(217, 70, 239, 0.25);
+  --nav-bg: rgba(255, 250, 252, 0.88);
+  --sheet-bg: #fffafc;
+  --shadow: 0 10px 28px rgba(120, 40, 80, 0.12);
+  --overlay: rgba(70, 25, 48, 0.38);
+}
