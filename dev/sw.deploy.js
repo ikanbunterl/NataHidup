@@ -1,12 +1,8 @@
 /* ============================================================
-   NataHidup V2 — Service Worker
-   Strategi:
-   - Aset aplikasi (same-origin): pre-cache saat install,
-     cache-first + revalidasi di latar belakang.
-   - CDN (React, Babel, Supabase, Tesseract, font):
-     stale-while-revalidate → app tetap bisa dibuka offline
-     setelah sekali dimuat.
-   - Request API (Supabase REST/Auth) & non-GET: selalu jaringan.
+   NataHidup V2 — Service Worker (MODE BUNDLE / deploy)
+   Sama seperti sw.js mode sumber, tapi daftar pre-cache pendek
+   karena seluruh aplikasi sudah jadi 2 file (app.bundle.js +
+   styles.css). CDN tetap stale-while-revalidate agar offline-ready.
    ============================================================ */
 const CACHE_NAME = 'natahidup-v2.0.0';
 const CDN_CACHE = 'natahidup-v2-cdn';
@@ -15,13 +11,8 @@ const APP_SHELL = [
   './',
   './index.html',
   './manifest.json',
-  './css/app.css',
-  './js/core.js',
-  './js/ocr.js',
-  './js/ui.jsx',
-  './js/modals.jsx',
-  './js/screens.jsx',
-  './js/app.jsx',
+  './styles.css',
+  './app.bundle.js',
 ];
 
 const CDN_HOSTS = [

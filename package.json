@@ -1,0 +1,16 @@
+{
+  "name": "natahidup-v2",
+  "version": "1.0.0",
+  "description": "Aplikasi produktivitas & keuangan pribadi (PWA) - Supabase",
+  "scripts": {
+    "build": "node dev/build.js",
+    "serve": "python3 -m http.server 8899",
+    "smoke": "node devtools/smoke.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

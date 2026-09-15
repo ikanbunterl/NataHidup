@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="midnight">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="description" content="NataHidup V2 — Aplikasi Produktivitas dan Keuangan Pribadi">
+    <meta name="theme-color" content="#0a0e1c">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="NataHidup">
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" type="image/png" href="./icons/icon-96x96.png">
+    <link rel="apple-touch-icon" href="./icons/icon-192x192.png">
+    <title>NataHidup V2</title>
+
+    <!-- Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Gaya: satu file (tema + basis + komponen) -->
+    <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Banner install PWA -->
+<div id="installBanner" class="install-banner hidden-el">
+  <div class="install-card">
+    <div>
+      <p style="font-weight:800;font-size:13.5px">Install NataHidup V2</p>
+      <p style="font-size:11px;opacity:.85">Jalankan seperti aplikasi native</p>
+    </div>
+    <div class="row gap-2">
+      <button id="installBtn" class="btn btn-sm" style="font-weight:800">Install</button>
+      <button id="dismissBtn" aria-label="Tutup" style="padding:6px;font-size:15px;opacity:.85">✕</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Library (CDN) ===== -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+
+<!-- ===== Service worker + install prompt ===== -->
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('SW registered:', reg.scope))
+                .catch(err => console.log('SW registration failed:', err));
+        });
+    }
+    let deferredPrompt;
+    const banner = document.getElementById('installBanner');
+    document.getElementById('installBtn').addEventListener('click', async () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            await deferredPrompt.userChoice;
+            deferredPrompt = null;
+            window.deferredPrompt = null;
+            banner.classList.add('hidden-el');
+        }
+    });
+    document.getElementById('dismissBtn').addEventListener('click', () => banner.classList.add('hidden-el'));
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        window.deferredPrompt = e;
+        if (!(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone)) {
+            banner.classList.remove('hidden-el');
+            clearTimeout(window.__nhBannerTimer);
+            window.__nhBannerTimer = setTimeout(() => banner.classList.add('hidden-el'), 9000);
+        }
+    });
+    window.addEventListener('appinstalled', () => { banner.classList.add('hidden-el'); deferredPrompt = null; window.deferredPrompt = null; });
+</script>
+
+<!-- ===== Modul aplikasi (urutan penting!) ===== -->
+<!-- Lapisan murni (tanpa JSX) -->
+<script src="./js/core.js"></script>
+<script src="./js/ocr.js"></script>
+
+<!-- Komponen JSX -->
+<script type="text/babel" src="./js/ui.jsx"></script>
+<script type="text/babel" src="./js/modals.jsx"></script>
+<script type="text/babel" src="./js/screens.jsx"></script>
+
+<!-- Root aplikasi (harus terakhir) -->
+<script type="text/babel" src="./js/app.jsx"></script>
+</body>
+</html>
