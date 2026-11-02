@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="description" content="NataHidup V2.1 — Teman finansial Gen-Z: catat cepat, split bill, wishlist, wrapped, maskot.">
+    <meta name="description" content="NataHidup V3 — Teman finansial Gen-Z: maskot interaktif, wrapped sinematik, split bill QR, tantangan mingguan.">
     <meta name="theme-color" content="#0a0e1c">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12,7 +12,7 @@
     <link rel="manifest" href="./manifest.json">
     <link rel="icon" type="image/png" href="./icons/icon-96x96.png">
     <link rel="apple-touch-icon" href="./icons/icon-192x192.png">
-    <title>NataHidup V2.1</title>
+    <title>NataHidup V3</title>
 
     <!-- Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -25,12 +25,12 @@
 <body>
 <div id="root"></div>
 
-<!-- Banner install PWA -->
+<!-- Banner install PWA (BUG-003: instruksi khusus iOS; BUG-007: timer dibersihkan saat ditutup) -->
 <div id="installBanner" class="install-banner hidden-el">
   <div class="install-card">
     <div>
-      <p style="font-weight:800;font-size:13.5px">Install NataHidup V2</p>
-      <p style="font-size:11px;opacity:.85">Jalankan seperti aplikasi native</p>
+      <p id="bannerTitle" style="font-weight:800;font-size:13.5px">Install NataHidup V3</p>
+      <p id="bannerSub" style="font-size:11px;opacity:.85">Jalankan seperti aplikasi native</p>
     </div>
     <div class="row gap-2">
       <button id="installBtn" class="btn btn-sm" style="font-weight:800">Install</button>
@@ -43,8 +43,9 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<!-- Catatan mode bundle: TIDAK ADA Babel di sini — JSX sudah dikompilasi
-     saat build, sehingga halaman dimuat jauh lebih cepat. -->
+<!-- BUG-001 (V3): kredensial Supabase dimuat dari config.js (terpisah dari bundle).
+     WAJIB dimuat sebelum app.bundle.js. -->
+<script src="./config.js"></script>
 
 <!-- ===== Service worker + install prompt ===== -->
 <script>
@@ -57,27 +58,56 @@
     }
     let deferredPrompt;
     const banner = document.getElementById('installBanner');
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone;
+
+    function hideBanner(persist) {
+        clearTimeout(window.__nhBannerTimer);
+        window.__nhBannerTimer = null;
+        banner.classList.add('hidden-el');
+        if (persist) { try { localStorage.setItem('nh3_banner_dismissed', '1'); } catch (e) {} }
+    }
+    function showBanner() { banner.classList.remove('hidden-el'); }
+
     document.getElementById('installBtn').addEventListener('click', async () => {
         if (deferredPrompt) {
             deferredPrompt.prompt();
             await deferredPrompt.userChoice;
             deferredPrompt = null;
             window.deferredPrompt = null;
-            banner.classList.add('hidden-el');
+            hideBanner(false);
+        } else if (isIOS) {
+            alert('Di iPhone/iPad: tekan tombol Share (ikon kotak + panah) di Safari, lalu pilih "Tambahkan ke Layar Utama" / "Add to Home Screen".');
+        } else {
+            alert('Untuk menginstall: buka menu browser (titik tiga) → "Install App" atau "Tambahkan ke Layar Utama".');
         }
     });
-    document.getElementById('dismissBtn').addEventListener('click', () => banner.classList.add('hidden-el'));
+    document.getElementById('dismissBtn').addEventListener('click', () => hideBanner(true));
+
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
         deferredPrompt = e;
         window.deferredPrompt = e;
-        if (!(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone)) {
-            banner.classList.remove('hidden-el');
+        if (!isStandalone) {
+            showBanner();
             clearTimeout(window.__nhBannerTimer);
-            window.__nhBannerTimer = setTimeout(() => banner.classList.add('hidden-el'), 9000);
+            window.__nhBannerTimer = setTimeout(() => hideBanner(false), 9000);
         }
     });
-    window.addEventListener('appinstalled', () => { banner.classList.add('hidden-el'); deferredPrompt = null; window.deferredPrompt = null; });
+    window.addEventListener('appinstalled', () => { hideBanner(false); deferredPrompt = null; window.deferredPrompt = null; });
+
+    /* BUG-003: iOS tidak punya beforeinstallprompt — tampilkan instruksi statis. */
+    if (isIOS && !isStandalone) {
+        let dismissed = false;
+        try { dismissed = localStorage.getItem('nh3_banner_dismissed') === '1'; } catch (e) {}
+        if (!dismissed) {
+            document.getElementById('bannerTitle').textContent = 'Install NataHidup V3 di iPhone';
+            document.getElementById('bannerSub').textContent = 'Share ⬆ → "Add to Home Screen" (via Safari)';
+            document.getElementById('installBtn').textContent = 'Cara Install';
+            showBanner(); /* tanpa auto-hide: instruksi, bukan prompt */
+        }
+    }
 </script>
 
 <!-- ===== Aplikasi: SATU file hasil bundle ===== -->

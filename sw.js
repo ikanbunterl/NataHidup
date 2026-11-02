@@ -1,12 +1,14 @@
 /* ============================================================
-   NataHidup V2.1 — Service Worker (MODE BUNDLE / deploy)
-   - CACHE_NAME dinaikkan ke natahidup-v2.1.1
+   NataHidup V3.0 — Service Worker (MODE BUNDLE / deploy)
+   - CACHE_NAME dinaikkan ke natahidup-v3.0.0
+   - config.js + ocr.worker.js ikut di-precache (BUG-001/004)
+   - F-3.9: handler push + notificationclick (Web Push 19.00)
    - Supabase API tetap network-only (data harus segar)
    - Navigasi network-first fallback index.html (query param
      shortcut PWA tetap diteruskan ke network)
    - URL blob: (Web Worker OCR) tidak pernah di-cache
    ============================================================ */
-const CACHE_NAME = 'natahidup-v2.1.1';
+const CACHE_NAME = 'natahidup-v3.0.0';
 const CDN_CACHE = 'natahidup-v2-cdn';
 
 const APP_SHELL = [
@@ -14,6 +16,8 @@ const APP_SHELL = [
   './index.html',
   './manifest.json',
   './styles.css',
+  './config.js',
+  './ocr.worker.js',
   './app.bundle.js',
 ];
 
@@ -103,4 +107,30 @@ self.addEventListener('fetch', (event) => {
       return cached || fetched;
     })
   );
+});
+
+/* ===== F-3.9 — Web Push (payload dikirim nightly-push Edge Function) ===== */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: 'NataHidup', body: (event.data && event.data.text()) || 'Catat pengeluaranmu 🌙' }; }
+  const title = data.title || 'NataHidup 🌙';
+  const body = data.body || 'Udah jam 7 malam — pengeluaran hari ini udah dicatat belum?';
+  event.waitUntil(self.registration.showNotification(title, {
+    body,
+    icon: data.icon || './icons/icon-192x192.png',
+    badge: './icons/icon-96x96.png',
+    tag: 'nh-7pm',
+    data: { url: data.url || './?action=add-expense' },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || './?action=add-expense';
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) {
+      if ('focus' in c) { c.navigate(url); return c.focus(); }
+    }
+    if (clients.openWindow) return clients.openWindow(url);
+  }));
 });
